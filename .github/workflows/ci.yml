@@ -58,6 +58,7 @@ jobs:
           test -f "$STREETLESS_DATA/streetless.sqlite"
 
   client-build:
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,3 +67,11 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work \
             devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5 \
             sh -lc 'set -e; dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson; make -C client; make -C client TEST_SLOT_EXPORT=1; test -s client/streetless.3dsx; test -s client/streetless-slot-export.3dsx'
+      - name: Upload 3DS client artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: streetless-3ds
+          path: |
+            client/streetless.3dsx
+            client/streetless-slot-export.3dsx
+          if-no-files-found: error

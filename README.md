@@ -175,7 +175,7 @@ A test pass expires after 24 hours, does not generate an automatic return pass a
 
 - `cd server && go test ./...` exercises the server, SQLite routing and proxy behavior.
 - From the repository root: `cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test && /tmp/streetless-wire-test`.
-- GitHub Actions runs the Go tests and vet, the native wire and pairing tests, a Docker Compose HTTPS smoke test, and builds both 3DS client variants on pushes and pull requests.
+- GitHub Actions runs the Go tests and vet, the native wire and pairing tests, a Docker Compose HTTPS smoke test, and builds both 3DS client variants on pushes and pull requests. After the tests and builds pass, download both `.3dsx` files from the workflow run's `streetless-3ds` artifact.
 - Verify QR scanning, pairing and StreetPass delivery on real 3DS hardware. A successful server test or cross-compilation is not hardware proof.
 
 CECD wrappers are derived from [NetPass](https://gitlab.com/3ds-netpass/netpass) and retain their copyright notices. The code is distributed under GPL-3.0-or-later; see [LICENSE](LICENSE). Do not copy NetPass artwork or sound assets without satisfying their separate license.
