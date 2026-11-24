@@ -24,32 +24,70 @@ cd server
 go build ./cmd/streetlessd
 ```
 
-Create a separate administrator password and store its hash. Keep the password in a password manager; never commit the hash file, TLS key or SQLite database.
+**The public website and 3DS API require HTTPS.** The 3DS client verifies the TLS certificate and does not support plain HTTP. Use either direct TLS in Streetless or TLS termination at a reverse proxy. Proxy mode uses plain HTTP only on the same host's loopback interface; never expose that backend port.
+
+Point a domain at the relay's public IPv4 address and obtain a certificate for that domain, including its full certificate chain. The default 3DS client trusts ISRG Root X1; use a compatible certificate chain or build the client with a different trusted root as described below. Open the public TCP port in the host firewall and provider's firewall.
+
+Create an administrator password and hash once. Keep the password in a password manager; never commit the hash file, TLS key or SQLite database:
 
 ```sh
 umask 077
+mkdir -p "$HOME/.local/share/streetless"
 ADMIN_PASSWORD=$(openssl rand -hex 32)
-printf '%s\n' "$ADMIN_PASSWORD" > admin-password.txt
-printf '%s' "$ADMIN_PASSWORD" | openssl dgst -sha256 -r | cut -d ' ' -f1 > admin.sha256
+printf '%s\n' "$ADMIN_PASSWORD" > "$HOME/.local/share/streetless/admin-password.txt"
+printf '%s' "$ADMIN_PASSWORD" | openssl dgst -sha256 -r | cut -d ' ' -f1 \
+  > "$HOME/.local/share/streetless/admin.sha256"
 unset ADMIN_PASSWORD
 ```
 
-Example direct HTTPS configuration (replace the example hostname and IPv4):
+Set the common options in the shell where `streetlessd` will run. Replace the domain and example IPv4 with the **public** address of the direct listener or proxy:
 
 ```sh
 export STREETLESS_ORIGIN=https://streetless.example.org
 export STREETLESS_PUBLIC_IPV4=203.0.113.10
-export STREETLESS_ADMIN_HASH_FILE=/etc/streetless/admin.sha256
-export STREETLESS_TLS_CERT=/etc/streetless/tls.crt
-export STREETLESS_TLS_KEY=/etc/streetless/tls.key
-export STREETLESS_DB=/var/lib/streetless/streetless.sqlite
-export STREETLESS_REGISTRATION=open  # or approval
+export STREETLESS_ADMIN_HASH_FILE="$HOME/.local/share/streetless/admin.sha256"
+export STREETLESS_DB="$HOME/.local/share/streetless/streetless.sqlite"
+export STREETLESS_REGISTRATION=open  # use approval to require admin approval
+```
+
+`STREETLESS_ORIGIN` is the public HTTPS origin, without a path or trailing slash. Include a non-default public port, for example `https://streetless.example.org:8443`; omit `:443`. The public IPv4 and origin are used for 3DS pairing and must be reachable by the console.
+
+### Option 1: Direct HTTPS
+
+Streetless terminates TLS itself. Provide the full certificate chain and private key as files readable by the server process; protect the private key from other users. For an unprivileged test on port 8443, open TCP 8443 and run from the `server` directory:
+
+```sh
+export STREETLESS_TRANSPORT=direct
+export STREETLESS_ORIGIN=https://streetless.example.org:8443
+export STREETLESS_LISTEN=0.0.0.0:8443
+export STREETLESS_TLS_CERT=/path/to/fullchain.pem
+export STREETLESS_TLS_KEY=/path/to/privkey.pem
 ./streetlessd
 ```
 
-Direct mode listens on `0.0.0.0:443` by default. Supply the certificate's complete chain and a certificate trusted by the 3DS client (its default trust root is ISRG Root X1). `/healthz` reports database readiness. The public website is at `/`, the account dashboard at `/me`, and the admin dashboard at `/admin` (HTTP Basic user `admin`). Administrators can approve registrations in approval mode and revoke access. Revocation cannot recall a pass already committed on a console.
+For public port 443, omit the `:8443` from `STREETLESS_ORIGIN` and set `STREETLESS_LISTEN=0.0.0.0:443`. Binding port 443 may require a service with the appropriate capability. Direct mode defaults to `0.0.0.0:443` when `STREETLESS_LISTEN` is not set.
 
-For Linux, use [deploy/streetless.service](deploy/streetless.service) with a dedicated `streetless` account and the credentials described there. For a same-host reverse proxy, use the [nginx example](deploy/nginx/streetless.conf.example) and [systemd override](deploy/systemd/streetless.service.d/proxy.conf): set `STREETLESS_TRANSPORT=proxy` and `STREETLESS_LISTEN=127.0.0.1:8080`, keeping `STREETLESS_ORIGIN` and `STREETLESS_PUBLIC_IPV4` set to the public endpoint. The reverse proxy terminates TLS. Do not expose the backend port or mount Streetless beneath a URL prefix. For a proxy on another machine, use direct TLS to the backend and verify its certificate while restricting access with a firewall.
+### Option 2: Same-host reverse proxy
+
+The proxy terminates HTTPS and forwards requests to the Streetless backend over loopback. Start the backend from the `server` directory with the common options above:
+
+```sh
+export STREETLESS_TRANSPORT=proxy
+export STREETLESS_LISTEN=127.0.0.1:8080
+./streetlessd
+```
+
+`STREETLESS_ORIGIN` must remain the **external HTTPS origin**, not the loopback address. Proxy mode accepts only a literal `127.0.0.1` listener; TLS certificate paths are not used by the backend. Do not publish port 8080. Local processes can reach it, so use a trusted host.
+
+Configure your proxy using [deploy/nginx/streetless.conf.example](deploy/nginx/streetless.conf.example): replace the domain and certificate paths, enable the virtual host, then run `nginx -t` and reload nginx. The example serves public HTTPS on port 443 and forwards the complete site and API to `127.0.0.1:8080`. Preserve the public `Host` header and mount Streetless at the root of its own origin, not under a URL prefix.
+
+For a proxy on another host, use direct TLS to the backend instead of proxy mode, restrict the upstream port with a firewall, and configure the proxy to verify the upstream certificate and hostname.
+
+### Verify and run as a service
+
+Open `https://streetless.example.org/healthz` (include the port if not 443); a healthy server returns `ok`. The website is at `/`, the account dashboard at `/me`, and the admin dashboard at `/admin` (HTTP Basic user `admin`, password in `admin-password.txt`). In approval mode, approve registrations in the admin dashboard. Revocation cannot recall a pass already committed on a console.
+
+The commands above run in the foreground. For Linux service deployment, use [deploy/streetless.service](deploy/streetless.service) with a dedicated `streetless` account and its specified credentials. For same-host proxy mode, also install the [systemd override](deploy/systemd/streetless.service.d/proxy.conf), and set `STREETLESS_TRANSPORT=proxy` and `STREETLESS_LISTEN=127.0.0.1:8080` in the environment file. Keep the public origin and IPv4 configured in both modes.
 
 ## Building the 3DS client
 
