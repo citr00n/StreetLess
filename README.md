@@ -17,12 +17,13 @@ A pairing code is temporary and can be claimed only by one console. Pairing agai
 
 ## Running a relay
 
-Build with Go 1.26 or later:
+Build the Docker image from the repository root:
 
 ```sh
-cd server
-go build ./cmd/streetlessd
+docker build -t streetless:local .
 ```
+
+The image contains only the server binary and runs as an unprivileged user by default. Its `/data` directory must be mounted from persistent, writable storage. The examples below run Docker as a non-root host user and explicitly use that user's UID and GID so the bind-mounted data and secrets are accessible.
 
 **The public website and 3DS API require HTTPS.** The 3DS client verifies the TLS certificate and does not support plain HTTP. Use either direct TLS in Streetless or TLS termination at a reverse proxy. Proxy mode uses plain HTTP only on the same host's loopback interface; never expose that backend port.
 
@@ -40,13 +41,12 @@ printf '%s' "$ADMIN_PASSWORD" | openssl dgst -sha256 -r | cut -d ' ' -f1 \
 unset ADMIN_PASSWORD
 ```
 
-Set the common options in the shell where `streetlessd` will run. Replace the domain and example IPv4 with the **public** address of the direct listener or proxy:
+Set the public options on the Docker host. Replace the domain and example IPv4 with the **public** address of the direct listener or proxy:
 
 ```sh
 export STREETLESS_ORIGIN=https://streetless.example.org
 export STREETLESS_PUBLIC_IPV4=203.0.113.10
-export STREETLESS_ADMIN_HASH_FILE="$HOME/.local/share/streetless/admin.sha256"
-export STREETLESS_DB="$HOME/.local/share/streetless/streetless.sqlite"
+export STREETLESS_DATA="$HOME/.local/share/streetless"
 export STREETLESS_REGISTRATION=open  # use approval to require admin approval
 ```
 
@@ -54,40 +54,88 @@ export STREETLESS_REGISTRATION=open  # use approval to require admin approval
 
 ### Option 1: Direct HTTPS
 
-Streetless terminates TLS itself. Provide the full certificate chain and private key as files readable by the server process; protect the private key from other users. For an unprivileged test on port 8443, open TCP 8443 and run from the `server` directory:
+Streetless terminates TLS itself. Set paths to the full certificate chain and private key on the Docker host. Both files must be readable by the chosen host user; do not make the private key publicly readable. Open TCP 8443 for this example:
 
 ```sh
-export STREETLESS_TRANSPORT=direct
 export STREETLESS_ORIGIN=https://streetless.example.org:8443
-export STREETLESS_LISTEN=0.0.0.0:8443
-export STREETLESS_TLS_CERT=/path/to/fullchain.pem
-export STREETLESS_TLS_KEY=/path/to/privkey.pem
-./streetlessd
+export TLS_CERT=/absolute/path/to/fullchain.pem
+export TLS_KEY=/absolute/path/to/privkey.pem
+docker run -d --name streetless --restart unless-stopped \
+  --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+  -p 8443:8443 \
+  --mount "type=bind,src=$STREETLESS_DATA,dst=/data" \
+  --mount "type=bind,src=$TLS_CERT,dst=/tls/fullchain.pem,readonly" \
+  --mount "type=bind,src=$TLS_KEY,dst=/tls/privkey.pem,readonly" \
+  -e STREETLESS_ORIGIN -e STREETLESS_PUBLIC_IPV4 -e STREETLESS_REGISTRATION \
+  -e STREETLESS_TRANSPORT=direct -e STREETLESS_LISTEN=0.0.0.0:8443 \
+  -e STREETLESS_ADMIN_HASH_FILE=/data/admin.sha256 \
+  -e STREETLESS_TLS_CERT=/tls/fullchain.pem -e STREETLESS_TLS_KEY=/tls/privkey.pem \
+  streetless:local
 ```
 
-For public port 443, omit the `:8443` from `STREETLESS_ORIGIN` and set `STREETLESS_LISTEN=0.0.0.0:443`. Binding port 443 may require a service with the appropriate capability. Direct mode defaults to `0.0.0.0:443` when `STREETLESS_LISTEN` is not set.
+For external port 443, omit `:8443` from `STREETLESS_ORIGIN` and replace `-p 8443:8443` with `-p 443:8443`. The process still listens on unprivileged port 8443 inside the container. The database persists in `STREETLESS_DATA`; back it up along with its SQLite WAL files while the server is stopped.
 
 ### Option 2: Same-host reverse proxy
 
-The proxy terminates HTTPS and forwards requests to the Streetless backend over loopback. Start the backend from the `server` directory with the common options above:
+The proxy terminates HTTPS and forwards requests over loopback. On a **native Linux Docker host**, host networking lets Streetless bind to the same loopback interface as the proxy; do not publish or expose port 8080. Local processes can reach the backend, so use a trusted host:
 
 ```sh
-export STREETLESS_TRANSPORT=proxy
-export STREETLESS_LISTEN=127.0.0.1:8080
-./streetlessd
+export STREETLESS_ORIGIN=https://streetless.example.org
+docker run -d --name streetless --restart unless-stopped --network host \
+  --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+  --mount "type=bind,src=$STREETLESS_DATA,dst=/data" \
+  -e STREETLESS_ORIGIN -e STREETLESS_PUBLIC_IPV4 -e STREETLESS_REGISTRATION \
+  -e STREETLESS_TRANSPORT=proxy -e STREETLESS_LISTEN=127.0.0.1:8080 \
+  -e STREETLESS_ADMIN_HASH_FILE=/data/admin.sha256 \
+  streetless:local
 ```
 
-`STREETLESS_ORIGIN` must remain the **external HTTPS origin**, not the loopback address. Proxy mode accepts only a literal `127.0.0.1` listener; TLS certificate paths are not used by the backend. Do not publish port 8080. Local processes can reach it, so use a trusted host.
+`STREETLESS_ORIGIN` must be the **external HTTPS origin**, not the loopback address. Proxy mode accepts only a literal `127.0.0.1` listener and does not use TLS certificate paths. Docker Desktop host networking has different availability and semantics; alternatively use direct HTTPS and a reverse proxy that verifies the upstream certificate.
 
-Configure your proxy using [deploy/nginx/streetless.conf.example](deploy/nginx/streetless.conf.example): replace the domain and certificate paths, enable the virtual host, then run `nginx -t` and reload nginx. The example serves public HTTPS on port 443 and forwards the complete site and API to `127.0.0.1:8080`. Preserve the public `Host` header and mount Streetless at the root of its own origin, not under a URL prefix.
+For example, add this nginx `server` block to the host's HTTP configuration. Replace the hostname and certificate paths, then run `nginx -t` and reload nginx:
 
-For a proxy on another host, use direct TLS to the backend instead of proxy mode, restrict the upstream port with a firewall, and configure the proxy to verify the upstream certificate and hostname.
+```nginx
+server {
+    listen 443 ssl;
+    server_name streetless.example.org;
+    ssl_certificate /etc/nginx/tls/streetless.fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/streetless.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_early_data off;
+    access_log off;
+    client_max_body_size 2m;
+    client_body_timeout 20s;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header Connection "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Forwarded-Port "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Real-IP "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 20s;
+        proxy_read_timeout 25s;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_next_upstream off;
+        proxy_redirect off;
+        proxy_intercept_errors off;
+    }
+}
+```
 
-### Verify and run as a service
+Preserve the public `Host` header and mount Streetless at the root of its own origin, not under a URL prefix. For a proxy on another host, use direct TLS to the backend, restrict the upstream port with a firewall, and configure the proxy to verify the upstream certificate and hostname.
+
+### Verify and operate
 
 Open `https://streetless.example.org/healthz` (include the port if not 443); a healthy server returns `ok`. The website is at `/`, the account dashboard at `/me`, and the admin dashboard at `/admin` (HTTP Basic user `admin`, password in `admin-password.txt`). In approval mode, approve registrations in the admin dashboard. Revocation cannot recall a pass already committed on a console.
 
-The commands above run in the foreground. For Linux service deployment, use [deploy/streetless.service](deploy/streetless.service) with a dedicated `streetless` account and its specified credentials. For same-host proxy mode, also install the [systemd override](deploy/systemd/streetless.service.d/proxy.conf), and set `STREETLESS_TRANSPORT=proxy` and `STREETLESS_LISTEN=127.0.0.1:8080` in the environment file. Keep the public origin and IPv4 configured in both modes.
+Use `docker logs streetless` to inspect startup errors and `docker stop streetless` to stop the server. To change configuration, remove the stopped container and run the appropriate command again; the data directory remains intact. In direct mode, restart the container after renewing the mounted certificate files. In proxy mode, reload the proxy after renewing its certificate.
 
 ## Building the 3DS client
 
@@ -113,4 +161,4 @@ A test pass expires after 24 hours, does not generate an automatic return pass a
 - From the repository root: `cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test && /tmp/streetless-wire-test`.
 - Verify QR scanning, pairing and StreetPass delivery on real 3DS hardware. A successful server test or cross-compilation is not hardware proof.
 
-CECD wrappers are derived from [NetPass](https://gitlab.com/3ds-netpass/netpass) and retain their copyright notices. The code is distributed under GPL-3.0-or-later; see [COPYING](COPYING). Do not copy NetPass artwork or sound assets without satisfying their separate license.
+CECD wrappers are derived from [NetPass](https://gitlab.com/3ds-netpass/netpass) and retain their copyright notices. The code is distributed under GPL-3.0-or-later; see [LICENSE](LICENSE). Do not copy NetPass artwork or sound assets without satisfying their separate license.
