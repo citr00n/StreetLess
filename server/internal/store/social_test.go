@@ -1,0 +1,130 @@
+package store
+
+import (
+	"errors"
+	"testing"
+)
+
+func action(t *testing.T, s *Store, p Principal, a Action) {
+	t.Helper()
+	if err := s.Act(t.Context(), p, a); err != nil {
+		t.Fatalf("%s: %v", a.Kind, err)
+	}
+}
+
+func viewFor(t *testing.T, s *Store, p Principal) SocialView {
+	t.Helper()
+	v, err := s.Social(t.Context(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func friendPair(t *testing.T, s *Store, a, b Principal) {
+	t.Helper()
+	action(t, s, a, Action{Kind: "friend_request", Code: viewFor(t, s, b).Me.FriendCode})
+	action(t, s, b, Action{Kind: "friend_accept", ID: a.ID})
+}
+
+func TestSocialRoutes(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	a, ca := testPeer(t, s, "A")
+	b, _ := testPeer(t, s, "B")
+	c, _ := testPeer(t, s, "C")
+	d, _ := testPeer(t, s, "D")
+	for _, p := range []Principal{a, b, c, d} {
+		action(t, s, p, Action{Kind: "public_set", Enabled: false})
+	}
+	friendPair(t, s, a, b)
+	friendPair(t, s, a, c)
+	friendPair(t, s, a, d)
+	old, newer := titleSlot(t, 2, 'o'), titleSlot(t, 2, 'n')
+	recv := titleSlot(t, 1, 0)
+	mustSync(t, s, a, old)
+	cookie, err := s.Login(t.Context(), ca.WebCode, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web, err := s.Session(t.Context(), cookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action(t, s, web, Action{Kind: "send_friend", ID: b.ID})
+	if st := viewFor(t, s, a).Sends[0].State; st != "waiting_sync" {
+		t.Fatalf("intent started without fresh data: %s", st)
+	}
+	if len(mustSync(t, s, b, recv)) != 0 {
+		t.Fatal("website published old slot")
+	}
+	mustSync(t, s, a, newer)
+	id := expectSlot(t, mustSync(t, s, b, recv), newer)
+	if len(mustSync(t, s, c, recv)) != 0 || len(mustSync(t, s, d, recv)) != 0 {
+		t.Fatal("direct pass leaked")
+	}
+	if err := s.Ack(t.Context(), b, []uint64{id}); err != nil {
+		t.Fatal(err)
+	}
+	if st := viewFor(t, s, a).Sends[0].State; st != "queued" {
+		t.Fatalf("unexpected state %s", st)
+	}
+
+	action(t, s, a, Action{Kind: "room_create", Name: "QA"})
+	r := viewFor(t, s, a).Rooms[0].ID
+	for _, p := range []Principal{b, c, d} {
+		action(t, s, a, Action{Kind: "room_invite", RoomID: r, ID: p.ID})
+	}
+	action(t, s, c, Action{Kind: "room_accept", RoomID: r})
+	if room := viewFor(t, s, b).Rooms[0]; room.State != "invited" || len(room.Members) != 0 {
+		t.Fatal("invite exposed members")
+	}
+	action(t, s, web, Action{Kind: "send_room", RoomID: r})
+	action(t, s, b, Action{Kind: "room_accept", RoomID: r})
+	// C is the only originally accepted participant. Removing it purges the
+	// pending pass without letting B (who joined late) inherit the delivery.
+	mustSync(t, s, a, newer)
+	if len(mustSync(t, s, b, recv)) != 0 || len(mustSync(t, s, d, recv)) != 0 {
+		t.Fatal("non-target got room pass")
+	}
+	if v := viewFor(t, s, c); v.Me.PendingInbox != 1 {
+		t.Fatalf("room pass not queued: %+v", v.Me)
+	}
+	action(t, s, c, Action{Kind: "room_set", RoomID: r, Enabled: false})
+	action(t, s, c, Action{Kind: "room_set", RoomID: r, Enabled: true})
+	if len(mustSync(t, s, c, recv)) != 0 {
+		t.Fatal("room pass revived after mute")
+	}
+}
+
+func TestWebCredentialReset(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	a, creds := testPeer(t, s, "A")
+	ctx := t.Context()
+	cookie, err := s.Login(ctx, creds.WebCode, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Session(ctx, cookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := s.ResetWeb(ctx, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Session(ctx, cookie); !errors.Is(err, ErrUnauthorized) {
+		t.Fatal("old session remained authorized")
+	}
+	if err := s.Act(ctx, p, Action{Kind: "public_set", Enabled: false}); !errors.Is(err, ErrUnauthorized) {
+		t.Fatal("revoked session mutation accepted")
+	}
+	if _, err := s.Login(ctx, creds.WebCode, ""); !errors.Is(err, ErrUnauthorized) {
+		t.Fatal("old web key remained authorized")
+	}
+	if _, err := s.Login(ctx, code, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Bearer(ctx, creds.Token); err != nil {
+		t.Fatal("reset replaced 3DS credential", err)
+	}
+}

@@ -1,0 +1,5 @@
+{{define "register"}}{{template "head" .}}
+<section class="narrow card"><h1>Регистрация</h1><p>Создайте учётную запись. На некоторых серверах требуется подтверждение администратора.</p>
+<form method="post" action="/register"><label>Подпись<input name="label" maxlength="32" required></label><p>От 1 до 32 печатных ASCII-символов.</p><label>Имя пользователя<input name="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" required autocomplete="username"></label><label>Пароль<input name="password" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><p>Пароль: от 12 до 128 байт UTF-8.</p><button>Зарегистрироваться</button></form><p><a href="/login">Уже есть учётная запись?</a></p></section>
+{{template "foot" .}}{{end}}
+{{define "pending"}}{{template "head" .}}<section class="narrow card"><h1>Ожидает подтверждения</h1><p>Администратор должен подтвердить вашу учётную запись до подключения консоли и обмена.</p><form method="post" action="/logout"><button>Выйти</button></form></section>{{template "foot" .}}{{end}}

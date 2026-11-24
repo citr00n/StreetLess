@@ -1,0 +1,3 @@
+{{define "pairing"}}{{template "head" .}}
+<section class="narrow card"><h1>Подключение 3DS</h1><p>Отсканируйте QR-код в приложении Streetless или введите данные вручную. Код действует 10 минут и предназначен только для вашей консоли.</p><img alt="QR-код подключения" width="256" height="256" src="{{.PairQR}}"><dl><dt>Сервер</dt><dd><code>{{.PairHost}}</code></dd><dt>IPv4</dt><dd><code>{{.PairIPv4}}</code></dd><dt>Порт</dt><dd><code>{{.PairPort}}</code></dd><dt>Одноразовый код</dt><dd><code>{{.PairCode}}</code></dd></dl><p>Не передавайте код другим. Новое подключение заменяет прежний токен консоли.</p><a href="/me">Вернуться в кабинет</a></section>
+{{template "foot" .}}{{end}}

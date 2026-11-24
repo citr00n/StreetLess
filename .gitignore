@@ -1,0 +1,12 @@
+.DS_Store
+/client/build/
+/client/streetless.3dsx
+/client/streetless.elf
+/client/streetless.smdh
+/client/streetless-slot-export.3dsx
+/client/streetless-slot-export.elf
+/client/streetless-slot-export.smdh
+/server/streetlessd
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

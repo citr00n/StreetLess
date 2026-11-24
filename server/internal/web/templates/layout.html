@@ -1,0 +1,6 @@
+{{define "head"}}<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Title}} — Streetless</title><link rel="stylesheet" href="/assets/streetless.css"></head>
+<body><a class="skip" href="#main">К содержимому</a><header class="top"><div class="wrap bar"><a class="brand" href="/">Streetless</a><nav aria-label="Главное меню"><a href="/login">Личный кабинет</a><a href="/admin">Администратор</a></nav></div></header>
+<main id="main" class="wrap">{{if .Error}}<p role="alert" class="alert">{{.Error}}</p>{{end}}{{end}}
+{{define "foot"}}</main><footer class="wrap foot">Streetless · StreetPass через Интернет</footer></body></html>{{end}}
+{{define "confirm"}}<label class="check"><input type="checkbox" name="confirm" value="yes" required> Подтверждаю действие</label>{{end}}

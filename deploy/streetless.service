@@ -1,0 +1,29 @@
+[Unit]
+Description=Streetless StreetPass relay
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/streetlessd
+User=streetless
+Group=streetless
+StateDirectory=streetless
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/streetless
+UMask=0077
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=15s
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+EnvironmentFile=/etc/streetless/server.env
+LoadCredential=tls.crt:/etc/streetless/tls.crt
+LoadCredential=tls.key:/etc/streetless/tls.key
+LoadCredential=admin.sha256:/etc/streetless/admin.sha256
+Environment=STREETLESS_TLS_CERT=%d/tls.crt STREETLESS_TLS_KEY=%d/tls.key STREETLESS_ADMIN_HASH_FILE=%d/admin.sha256
+
+[Install]
+WantedBy=multi-user.target
