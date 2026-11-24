@@ -75,6 +75,22 @@ docker run -d --name streetless --restart unless-stopped \
 
 For external port 443, omit `:8443` from `STREETLESS_ORIGIN` and replace `-p 8443:8443` with `-p 443:8443`. The process still listens on unprivileged port 8443 inside the container. The database persists in `STREETLESS_DATA`; back it up along with its SQLite WAL files while the server is stopped.
 
+#### Docker Compose
+
+The [Compose example](compose.yaml) runs the same direct-HTTPS configuration. After creating the administrator hash and setting the common public options above, export the host user's numeric UID and GID and the absolute certificate paths:
+
+```sh
+export STREETLESS_UID="$(id -u)"
+export STREETLESS_GID="$(id -g)"
+export STREETLESS_ORIGIN=https://streetless.example.org:8443
+export STREETLESS_PORT=8443
+export TLS_CERT=/absolute/path/to/fullchain.pem
+export TLS_KEY=/absolute/path/to/privkey.pem
+docker compose up -d --build
+```
+
+The data directory and both certificate files must already exist and be accessible to that UID/GID. Compose mounts the certificates read-only and persists the database and administrator hash in `STREETLESS_DATA`. For public port 443 set `STREETLESS_PORT=443` and remove `:8443` from `STREETLESS_ORIGIN`. Use `docker compose logs -f` to view logs, `docker compose restart` after certificate renewal, and `docker compose down` to stop the container; the bind-mounted data is retained. This example is for direct HTTPS; for a same-host reverse proxy use the proxy instructions below.
+
 ### Option 2: Same-host reverse proxy
 
 The proxy terminates HTTPS and forwards requests over loopback. On a **native Linux Docker host**, host networking lets Streetless bind to the same loopback interface as the proxy; do not publish or expose port 8080. Local processes can reach the backend, so use a trusted host:
@@ -159,6 +175,7 @@ A test pass expires after 24 hours, does not generate an automatic return pass a
 
 - `cd server && go test ./...` exercises the server, SQLite routing and proxy behavior.
 - From the repository root: `cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test && /tmp/streetless-wire-test`.
+- GitHub Actions runs the Go tests and vet, the native wire and pairing tests, and a Docker Compose HTTPS smoke test on pushes and pull requests.
 - Verify QR scanning, pairing and StreetPass delivery on real 3DS hardware. A successful server test or cross-compilation is not hardware proof.
 
 CECD wrappers are derived from [NetPass](https://gitlab.com/3ds-netpass/netpass) and retain their copyright notices. The code is distributed under GPL-3.0-or-later; see [LICENSE](LICENSE). Do not copy NetPass artwork or sound assets without satisfying their separate license.

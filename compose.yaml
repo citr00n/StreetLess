@@ -1,0 +1,39 @@
+services:
+  streetless:
+    build: .
+    image: streetless:local
+    restart: unless-stopped
+    user: "${STREETLESS_UID:?Set STREETLESS_UID}:${STREETLESS_GID:?Set STREETLESS_GID}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${STREETLESS_PORT:-8443}:8443"
+    environment:
+      STREETLESS_ORIGIN: "${STREETLESS_ORIGIN:?Set the public HTTPS origin}"
+      STREETLESS_PUBLIC_IPV4: "${STREETLESS_PUBLIC_IPV4:?Set the public IPv4 address}"
+      STREETLESS_REGISTRATION: "${STREETLESS_REGISTRATION:-open}"
+      STREETLESS_TRANSPORT: direct
+      STREETLESS_LISTEN: 0.0.0.0:8443
+      STREETLESS_ADMIN_HASH_FILE: /data/admin.sha256
+      STREETLESS_TLS_CERT: /tls/fullchain.pem
+      STREETLESS_TLS_KEY: /tls/privkey.pem
+    volumes:
+      - type: bind
+        source: "${STREETLESS_DATA:?Set the persistent data directory}"
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${TLS_CERT:?Set the certificate chain path}"
+        target: /tls/fullchain.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${TLS_KEY:?Set the private key path}"
+        target: /tls/privkey.pem
+        read_only: true
+        bind:
+          create_host_path: false

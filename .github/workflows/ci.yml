@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Test Go server
+        working-directory: server
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Test client wire and pairing codecs
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test
+          /tmp/streetless-wire-test
+          cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/pair.c client/source/config.c client/tests/pair_test.c -o /tmp/streetless-pair-test
+          /tmp/streetless-pair-test
+      - name: Test Compose HTTPS deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=$(mktemp -d "$RUNNER_TEMP/streetless.XXXXXX")
+          export COMPOSE_PROJECT_NAME="streetless-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export STREETLESS_DATA="$D/data" STREETLESS_UID="$(id -u)" STREETLESS_GID="$(id -g)"
+          export STREETLESS_ORIGIN=https://localhost:18443 STREETLESS_PORT=18443
+          export STREETLESS_PUBLIC_IPV4=127.0.0.1 TLS_CERT="$D/cert.pem" TLS_KEY="$D/key.pem"
+          mkdir "$STREETLESS_DATA"
+          printf '%064d' 0 > "$STREETLESS_DATA/admin.sha256"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
+            -addext subjectAltName=DNS:localhost -keyout "$TLS_KEY" -out "$TLS_CERT" >/dev/null 2>&1
+          cleanup() { docker compose down; rm -rf "$D"; }
+          trap cleanup EXIT
+          docker compose up -d --build
+          healthy=false
+          for attempt in {1..20}; do
+            if [ "$(curl --fail --silent --cacert "$TLS_CERT" https://localhost:18443/healthz || true)" = ok ]; then
+              healthy=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$healthy" != true ]; then
+            docker compose logs
+            exit 1
+          fi
+          test -f "$STREETLESS_DATA/streetless.sqlite"
