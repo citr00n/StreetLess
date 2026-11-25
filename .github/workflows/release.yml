@@ -116,10 +116,11 @@ jobs:
           if [ "$PRERELEASE" = true ]; then
             args+=(--prerelease)
           fi
+          notes=$(printf '### Install the CIA with FBI\n\n![CIA installation QR code](https://github.com/%s/releases/download/%s/streetless-cia-qr.png)' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME")
           # Creating a draft fails if this tag already has a release; never overwrite it.
           gh release create "$GITHUB_REF_NAME" release/streetless.3dsx release/streetless.cia \
             release/0004013000F5A302.cxi release/streetless-cia-qr.png \
-            --verify-tag --draft --title "$GITHUB_REF_NAME" --generate-notes "${args[@]}"
+            --verify-tag --draft --title "$GITHUB_REF_NAME" --notes "$notes" --generate-notes "${args[@]}"
       - name: Push versioned container image
         shell: bash
         env:

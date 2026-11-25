@@ -37,8 +37,10 @@ jobs:
           /tmp/streetless-wire-test
           cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/pair.c client/source/config.c client/tests/pair_test.c -o /tmp/streetless-pair-test
           /tmp/streetless-pair-test
-          cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -Iclient/include client/source/pair_store.c client/source/config.c client/tests/pair_store_test.c -o /tmp/streetless-pair-store-test
+          cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -Iclient/include client/source/pair_store.c client/source/sd_replace.c client/source/config.c client/tests/pair_store_test.c -o /tmp/streetless-pair-store-test
           /tmp/streetless-pair-store-test
+          cc -std=c11 -Wall -Wextra -Werror -D__3DS__ -Iclient/tests/stubs -Iclient/include client/source/sd_replace.c client/tests/sd_replace_test.c -o /tmp/streetless-sd-replace-test
+          /tmp/streetless-sd-replace-test
       - name: Test client title selection
         run: |
           cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/title_names.c client/tests/title_names_test.c -o /tmp/streetless-title-test

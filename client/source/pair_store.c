@@ -1,4 +1,5 @@
 #include "pair_store.h"
+#include "sd_replace.h"
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
@@ -32,7 +33,13 @@ bool pair_store_save(const char *tmp, const char *path, const PairData *data,
     if (fclose(f) != 0 && ok) ok = fail(error, "close");
     if (!ok) { unlink(tmp); return false; }
     /* libctru may delete an existing destination before a failed rename. */
-    if (rename(tmp, path) != 0) return fail(error, "rename");
+    SDReplaceError replacement;
+    if (!sd_replace(tmp, path, &replacement)) {
+        error->step = "rename";
+        error->error = replacement.error;
+        error->native = replacement.native;
+        return false;
+    }
     return true;
 }
 
@@ -54,8 +61,11 @@ int pair_store_recover(const char *tmp, const char *path, const PairData *pendin
     if (!valid || saved.port != pending->config.port ||
         strcmp(saved.host, pending->config.host) || strcmp(saved.ipv4, pending->config.ipv4) ||
         strcmp(saved.token, pending->config.token)) return 0;
-    if (rename(tmp, path) != 0) {
-        fail(error, "rename");
+    SDReplaceError replacement;
+    if (!sd_replace(tmp, path, &replacement)) {
+        error->step = "rename";
+        error->error = replacement.error;
+        error->native = replacement.native;
         return -1;
     }
     return 1;
