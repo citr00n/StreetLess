@@ -42,7 +42,7 @@ $(TARGET).cia: $(TARGET).elf $(TARGET).smdh $(BUILD)/banner.bnr $(BUILD)/romfs/c
 	makerom -f cia -o $@ -rsf streetless.rsf -target t -exefslogo -elf $(TARGET).elf -icon $(TARGET).smdh -banner $(BUILD)/banner.bnr
 
 $(TARGET).elf: $(OBJECTS)
-	$(CC) $(LDFLAGS) -o $@ $^ $(CURL_LIBS) -ljansson -lctru -lm
+	$(CC) $(LDFLAGS) -o $@ $^ $(CURL_LIBS) -ljansson -lcitro2d -lcitro3d -lctru -lm
 
 $(BUILD)/%.o: source/%.c
 	@mkdir -p $(BUILD)

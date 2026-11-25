@@ -37,6 +37,7 @@ bool pair_parse(const unsigned char *payload, size_t length, PairData *out) {
 
 #ifdef __3DS__
 #include "http.h"
+#include "menu_ui.h"
 #include "pair_store.h"
 #include "ui.h"
 #include "quirc.h"
@@ -205,7 +206,7 @@ static bool generate_token(char token[65]) {
     return true;
 }
 
-bool pair_run(Config *config, const char *debug_pin) {
+bool pair_run(Config *config, const char *debug_pin, PairMethod method) {
     PairData data;
     bool pending_debug = false;
     int pending = load_pending(&data, &pending_debug);
@@ -214,11 +215,12 @@ bool pair_run(Config *config, const char *debug_pin) {
         return false;
     }
     if (pending) {
-        consoleClear();
-        printf("Streetless / Pending pairing\n\n%s:%u\n\nA Retry saved claim\nX Discard saved claim\nB Cancel   START Exit\n",
-            data.config.host, (unsigned)data.config.port);
-        uint32_t keys;
-        do { keys = ui_keys(); } while (keys && !(keys & (KEY_A | KEY_B | KEY_X)));
+        char target[sizeof(data.config.host) + 8];
+        snprintf(target, sizeof(target), "%s:%u",
+                 data.config.host, (unsigned)data.config.port);
+        uint32_t keys = menu_ui_prompt("Pending pairing", target, NULL, 0, NULL,
+                                       KEY_A | KEY_B | KEY_X,
+                                       "A Retry   X Discard   B Back");
         if (!keys || (keys & KEY_B)) return false;
         if (keys & KEY_X) {
             if (ui_confirm("Discard claim", data.config.host,
@@ -241,12 +243,7 @@ bool pair_run(Config *config, const char *debug_pin) {
         }
         if (recovered > 0) return finish_pairing(config, &data);
     } else {
-        consoleClear();
-        puts("Streetless / Pair console\n\nA Scan QR\nY Enter one-time code\nB Cancel   START Exit");
-        uint32_t keys;
-        do { keys = ui_keys(); } while (keys && !(keys & (KEY_A | KEY_Y | KEY_B)));
-        if (!keys || (keys & KEY_B)) return false;
-        if (!((keys & KEY_A) ? scan(&data) : manual(&data, debug_pin != NULL))) return false;
+        if (!(method == PAIR_QR ? scan(&data) : manual(&data, debug_pin != NULL))) return false;
         char target[290];
         snprintf(target, sizeof(target), "%s:%u\nIPv4: %s", data.config.host,
             (unsigned)data.config.port, data.config.ipv4);

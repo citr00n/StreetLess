@@ -11,6 +11,7 @@ typedef struct {
 /* Parses exactly streetless1|HOST|IPV4|PORT|CODE, without a URL or token. */
 bool pair_parse(const unsigned char *payload, size_t length, PairData *out);
 #ifdef __3DS__
-bool pair_run(Config *config, const char *debug_pin);
+typedef enum { PAIR_QR, PAIR_CODE } PairMethod;
+bool pair_run(Config *config, const char *debug_pin, PairMethod method);
 #endif
 #endif
