@@ -192,20 +192,48 @@ static uint32_t text_menu(const char *title, const char *details,
     return 0;
 }
 
+/* Keep Citro3D's APT hook installed while system applets temporarily own
+ * the GPU. Its restore hook marks shaders and GPU state dirty on return. */
+static struct {
+    C3D_RenderTarget *top, *bottom;
+    C2D_TextBuf text;
+    bool c3d, c2d, ready, unavailable;
+} graphics;
+
+void menu_ui_shutdown(void) {
+    if (graphics.text) C2D_TextBufDelete(graphics.text);
+    if (graphics.top) C3D_RenderTargetDelete(graphics.top);
+    if (graphics.bottom) C3D_RenderTargetDelete(graphics.bottom);
+    if (graphics.c2d) C2D_Fini();
+    if (graphics.c3d) C3D_Fini();
+    graphics.text = NULL;
+    graphics.top = graphics.bottom = NULL;
+    graphics.c3d = graphics.c2d = graphics.ready = false;
+}
+
+static bool graphics_init(void) {
+    if (graphics.ready) return true;
+    if (!(graphics.c3d = C3D_Init(C3D_DEFAULT_CMDBUF_SIZE))) return false;
+    if (!(graphics.c2d = C2D_Init(C2D_DEFAULT_MAX_OBJECTS))) return false;
+    C2D_Prepare();
+    graphics.top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
+    graphics.bottom = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+    graphics.text = C2D_TextBufNew(2048);
+    graphics.ready = graphics.top && graphics.bottom && graphics.text;
+    return graphics.ready;
+}
+
 uint32_t menu_ui_prompt(const char *title, const char *details,
                         const char *const *items, size_t count, unsigned *selected,
                         uint32_t accepted_keys, const char *footer) {
-    C3D_RenderTarget *top = NULL, *bottom = NULL;
-    C2D_TextBuf buf = NULL;
-    bool c3d = false, c2d = false, failed = false;
+    bool failed = false;
     uint32_t action = 0;
     size_t page = 0, pages;
-    static bool graphics_unavailable;
 
     if (count > UINT_MAX || (count && (!items || !selected))) return 0;
     if (count && *selected >= count) *selected = 0;
     pages = page_count(details);
-    if (graphics_unavailable)
+    if (graphics.unavailable)
         return text_menu(title, details, items, count, selected, accepted_keys, footer, page, pages);
     /* consoleInit uses RGB565 and single buffering. Citro2D's screen
      * targets output RGB8; reset both screens before any GPU transfer. */
@@ -213,17 +241,11 @@ uint32_t menu_ui_prompt(const char *title, const char *details,
     gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
     gfxSetDoubleBuffering(GFX_TOP, true);
     gfxSetDoubleBuffering(GFX_BOTTOM, true);
-    if (!(c3d = C3D_Init(C3D_DEFAULT_CMDBUF_SIZE))) goto error;
-    if (!(c2d = C2D_Init(C2D_DEFAULT_MAX_OBJECTS))) goto error;
-    C2D_Prepare();
-    top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
-    bottom = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
-    buf = C2D_TextBufNew(2048);
-    if (!top || !bottom || !buf) goto error;
+    if (!graphics_init()) goto error;
 
     while (ui_running()) {
         if (!C3D_FrameBegin(C3D_FRAME_SYNCDRAW)) goto error;
-        draw_menu(top, bottom, buf, title, details, items, count,
+        draw_menu(graphics.top, graphics.bottom, graphics.text, title, details, items, count,
                   count ? *selected : 0, footer, page, pages);
         C3D_FrameEnd(0);
         C3D_FrameSync();
@@ -237,15 +259,13 @@ uint32_t menu_ui_prompt(const char *title, const char *details,
 error:
     failed = true;
 cleanup:
-    if (c3d) C3D_FrameSync();
-    if (buf) C2D_TextBufDelete(buf);
-    if (top) C3D_RenderTargetDelete(top);
-    if (bottom) C3D_RenderTargetDelete(bottom);
-    if (c2d) C2D_Fini();
-    if (c3d) C3D_Fini();
+    /* Begin waits for the prior transfer. End the empty frame before
+     * switching to CPU-rendered console output. */
+    if (graphics.ready && C3D_FrameBegin(0)) C3D_FrameEnd(0);
+    if (failed) menu_ui_shutdown();
     restore_console();
     if (failed && ui_running()) {
-        graphics_unavailable = true;
+        graphics.unavailable = true;
         return text_menu(title, details, items, count, selected, accepted_keys, footer, page, pages);
     }
     return action;

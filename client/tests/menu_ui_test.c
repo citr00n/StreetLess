@@ -11,7 +11,8 @@ static u8 pixels[320 * 240 * 3];
 static unsigned inputs[] = {KEY_DOWN, KEY_DOWN, KEY_A, KEY_B,
                             KEY_RIGHT, KEY_LEFT, KEY_RIGHT, KEY_X, KEY_Y, 0, KEY_A, KEY_A, KEY_A | KEY_B};
 static size_t input_index;
-static int frames;
+static int frames, initializations, shutdowns;
+static bool apt_restore_hook;
 static bool saw_first_page, saw_second_page, saw_indicator;
 
 bool ui_running(void) { return true; }
@@ -26,7 +27,7 @@ void gfxFlushBuffers(void) {}
 void gfxScreenSwapBuffers(int screen, bool stereo) { (void)screen; (void)stereo; }
 void consoleInit(int screen, void *console) { (void)console; format[screen] = GSP_RGB565_OES; double_buffered[screen] = false; }
 void consoleClear(void) {}
-bool C3D_Init(int size) { (void)size; return true; }
+bool C3D_Init(int size) { (void)size; ++initializations; apt_restore_hook = true; return true; }
 bool C2D_Init(int size) { (void)size; return true; }
 void C2D_Prepare(void) {}
 C3D_RenderTarget *C2D_CreateScreenTarget(int screen, int side) { (void)side; return &targets[screen]; }
@@ -49,19 +50,22 @@ bool C3D_FrameBegin(int flags) {
     /* Citro2D transfers RGB8 to both targets: RGB565 makes the top image corrupt. */
     assert(format[GFX_TOP] == GSP_BGR8_OES && format[GFX_BOTTOM] == GSP_BGR8_OES);
     assert(double_buffered[GFX_TOP] && double_buffered[GFX_BOTTOM]);
-    ++frames; return true;
+    if (flags & C3D_FRAME_SYNCDRAW) ++frames;
+    return true;
 }
 void C3D_FrameEnd(int flags) { (void)flags; }
 void C3D_FrameSync(void) {}
 void C3D_RenderTargetDelete(C3D_RenderTarget *target) { (void)target; }
 void C2D_Fini(void) {}
-void C3D_Fini(void) {}
+void C3D_Fini(void) { ++shutdowns; apt_restore_hook = false; }
 int main(void) {
     const char *items[] = {"Sync", "Settings", "Account"};
     unsigned selected = 0;
     assert(menu_ui_choose("Streetless", "HTTPS", items, 3, &selected, false));
     assert(selected == 2 && frames == 3);
     assert(format[GFX_TOP] == GSP_RGB565_OES && !double_buffered[GFX_TOP]);
+    /* The APT restore hook must remain installed across the system keyboard. */
+    assert(initializations == 1 && shutdowns == 0 && apt_restore_hook);
     /* Entering a second menu must switch formats again; B returns to the previous screen. */
     assert(!menu_ui_choose("Account", "HTTPS", items, 3, &selected, true));
     assert(format[GFX_TOP] == GSP_RGB565_OES && !double_buffered[GFX_TOP]);
@@ -78,5 +82,8 @@ int main(void) {
                           NULL, 0, NULL, KEY_A | KEY_B, "A Confirm") == KEY_A);
     assert(saw_first_page && saw_second_page);
     assert(menu_ui_prompt("Cancel", "", NULL, 0, NULL, KEY_A | KEY_B, "A Confirm B Cancel") == KEY_B);
+    assert(initializations == 1 && shutdowns == 0 && apt_restore_hook);
+    menu_ui_shutdown();
+    assert(shutdowns == 1 && !apt_restore_hook);
     return 0;
 }

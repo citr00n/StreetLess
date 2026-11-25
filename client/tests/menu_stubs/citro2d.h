@@ -6,7 +6,7 @@ typedef void *C2D_TextBuf;
 typedef struct { const char *str; } C2D_Text;
 #define C3D_DEFAULT_CMDBUF_SIZE 1
 #define C2D_DEFAULT_MAX_OBJECTS 1
-#define C3D_FRAME_SYNCDRAW 0
+#define C3D_FRAME_SYNCDRAW 1
 #define C2D_WithColor 0
 #define C2D_Color32(r,g,b,a) ((u32)(r) | ((u32)(g)<<8) | ((u32)(b)<<16) | ((u32)(a)<<24))
 bool C3D_Init(int); bool C2D_Init(int); void C2D_Prepare(void);

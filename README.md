@@ -86,6 +86,8 @@ See [DEPLOY.md](DEPLOY.md) for Docker and Compose setup, direct HTTPS, same-host
 
 `server/` contains the Go relay, SQLite store, templates and assets; `client/` contains the 3DS application and host tests; `background/` contains the optional module.
 
+The client keeps its Citro3D context alive across system applets so its APT restore hook can reinitialize GPU state after the software keyboard closes. Menus restore the text console for operational logs, and release graphics before `gfxExit()`.
+
 ### Build
 
 From the repository root:

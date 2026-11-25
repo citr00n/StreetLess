@@ -348,6 +348,7 @@ int main(void) {
         run_menu(&config, valid);
         romfsExit();
     }
+    menu_ui_shutdown();
     gfxExit();
     return 0;
 }

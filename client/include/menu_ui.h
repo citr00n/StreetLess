@@ -14,4 +14,7 @@ bool menu_ui_choose(const char *title, const char *status,
                     const char *const *items, size_t count,
                     unsigned *selected, bool allow_back);
 
+/* Release the persistent graphical context before gfxExit(). */
+void menu_ui_shutdown(void);
+
 #endif
