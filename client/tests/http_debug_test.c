@@ -24,7 +24,7 @@ static void headers(int fd, char *request, size_t cap) {
     }
 }
 
-static void serve(int listener, const char *reply, bool pair, bool succeeds) {
+static void serve(int listener, int response_status, const char *reply, bool pair, bool succeeds) {
     struct pollfd ready = {listener, POLLIN, 0};
     assert(poll(&ready, 1, 5000) == 1);
     int fd = accept(listener, NULL, NULL);
@@ -37,8 +37,8 @@ static void serve(int listener, const char *reply, bool pair, bool succeeds) {
     assert(!strstr(request, "code="));
     char response[256];
     int len = snprintf(response, sizeof(response),
-        "HTTP/1.1 200 OK\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
-        strlen(reply), reply);
+        "HTTP/1.1 %d Test\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+        response_status, strlen(reply), reply);
     assert(send(fd, response, (size_t)len, 0) == len);
     close(fd);
     if (!succeeds) {
@@ -59,7 +59,7 @@ static void serve(int listener, const char *reply, bool pair, bool succeeds) {
     close(fd);
 }
 
-static void scenario(const char *reply, bool pair, bool succeeds) {
+static void scenario(int response_status, const char *reply, bool pair, CURLcode expected) {
     int listener = socket(AF_INET, SOCK_STREAM, 0);
     assert(listener >= 0);
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
@@ -79,11 +79,12 @@ static void scenario(const char *reply, bool pair, bool succeeds) {
         long status;
         CURLcode rc = pair ? http_pair(&h, "code=secret&token=secret", 24, response, sizeof(response), &received, &status)
                            : http_request(&h, "/v1/social", NULL, NULL, 0, response, sizeof(response), &received, &status);
-        assert(succeeds ? rc == CURLE_OK && status == 204 : rc != CURLE_OK);
+        assert(rc == expected);
+        if (expected == CURLE_OK) assert(status == 204);
         http_close(&h);
         _exit(0);
     }
-    serve(listener, reply, pair, succeeds);
+    serve(listener, response_status, reply, pair, expected == CURLE_OK);
     close(listener);
     int status;
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
@@ -123,9 +124,11 @@ int main(void) {
     assert(!http_debug_pin_valid(NULL) && !http_debug_pin_valid("123") &&
            !http_debug_pin_valid("12345") && !http_debug_pin_valid("12a4"));
     cancel_before_request();
-    scenario("wrong", false, false);
-    scenario("streetless-debug-v1\nextra", true, false);
-    scenario("streetless-debug-v1\n", false, true);
-    scenario("streetless-debug-v1\n", true, true);
+    scenario(200, "wrong", false, CURLE_WEIRD_SERVER_REPLY);
+    scenario(200, "streetless-debug-v1\nextra", true, CURLE_WEIRD_SERVER_REPLY);
+    scenario(401, "A long unauthorized response from a proxy", true, CURLE_LOGIN_DENIED);
+    scenario(502, "A long error response from a proxy", false, CURLE_WEIRD_SERVER_REPLY);
+    scenario(200, "streetless-debug-v1\n", false, CURLE_OK);
+    scenario(200, "streetless-debug-v1\n", true, CURLE_OK);
     return 0;
 }
