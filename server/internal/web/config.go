@@ -16,20 +16,12 @@ type Config struct {
 	Port                                     int
 	AdminHash                                [32]byte
 	Transport, Listen, DB, CertFile, KeyFile string
-	Registration                             string
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
 	var c Config
 	invalid := func(name string) (Config, error) {
 		return Config{}, fmt.Errorf("invalid or missing %s", name)
-	}
-	c.Registration = getenv("STREETLESS_REGISTRATION")
-	if c.Registration == "" {
-		c.Registration = "open"
-	}
-	if c.Registration != "open" && c.Registration != "approval" {
-		return invalid("STREETLESS_REGISTRATION")
 	}
 	c.Origin = getenv("STREETLESS_ORIGIN")
 	authority, hasScheme := strings.CutPrefix(c.Origin, "https://")

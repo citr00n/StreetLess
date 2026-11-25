@@ -2,6 +2,8 @@ package web
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
 	"fmt"
 	"html/template"
@@ -28,9 +30,9 @@ var pages = template.Must(template.New("site").Funcs(template.FuncMap{
 	},
 	"enabled": func(on bool) string {
 		if on {
-			return "включён"
+			return "on"
 		}
-		return "выключен"
+		return "off"
 	},
 	"friendState":      friendState,
 	"friendRemove":     friendRemove,
@@ -42,18 +44,20 @@ var pages = template.Must(template.New("site").Funcs(template.FuncMap{
 	"utc":              func(t time.Time) string { return t.UTC().Format("02.01.2006 15:04") },
 	"age": func(now, created time.Time) string {
 		minutes := max(0, int(now.Sub(created)/time.Minute))
-		return fmt.Sprintf("%d ч %02d мин", minutes/60, minutes%60)
+		return fmt.Sprintf("%d h %02d min", minutes/60, minutes%60)
 	},
 }).ParseFS(templateFiles, "templates/*.html"))
 
 type page struct {
 	Title, Error                           string
+	IsAdmin                                bool
+	Registration                           string
 	Social                                 store.SocialView
 	Admin                                  store.AdminView
 	Now                                    time.Time
 	NextParticipants, NextRooms, NextQueue string
 	ID                                     int64
-	Label, ClientConfig, WebCode           string
+	Label, ClientConfig                    string
 	Pending                                []store.PendingAccount
 	PairCode, PairHost, PairIPv4           string
 	PairQR                                 template.URL
@@ -74,7 +78,7 @@ func render(w http.ResponseWriter, status int, name string, data page) {
 }
 
 func (s *server) home(w http.ResponseWriter, _ *http.Request) {
-	render(w, http.StatusOK, "home", page{Title: "Главная"})
+	render(w, http.StatusOK, "home", page{Title: "Home"})
 }
 
 func (s *server) css(w http.ResponseWriter, _ *http.Request) {
@@ -97,7 +101,7 @@ func writeSession(w http.ResponseWriter, value string, maxAge int) {
 }
 
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
-	data := page{Title: "Вход"}
+	data := page{Title: "Sign in"}
 	switch r.Method {
 	case http.MethodGet:
 		render(w, http.StatusOK, "login", data)
@@ -109,14 +113,20 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		if status == 0 {
 			var cookie string
 			var err error
+			isAdmin := false
 			switch {
-			case len(form) == 1 && form.Has("code"):
-				cookie, err = s.db.Login(r.Context(), form.Get("code"), browserToken(r))
 			case len(form) == 2 && form.Has("username") && form.Has("password"):
 				if !s.limits.allow(r, "login", 10, 200) || !s.passwordSlot() {
 					status = http.StatusTooManyRequests
 				} else {
-					cookie, err = s.db.LoginPassword(r.Context(), form.Get("username"), form.Get("password"), browserToken(r))
+					username, password := form.Get("username"), form.Get("password")
+					digest := sha256.Sum256([]byte(password))
+					if strings.EqualFold(username, "admin") && subtle.ConstantTimeCompare(digest[:], s.cfg.AdminHash[:]) == 1 {
+						cookie, err = s.db.LoginAdmin(r.Context(), browserToken(r))
+						isAdmin = true
+					} else {
+						cookie, err = s.db.LoginPassword(r.Context(), username, password, browserToken(r))
+					}
 					<-s.passwordSlots
 				}
 			default:
@@ -126,14 +136,16 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 				status = storeStatus(err)
 			}
 			if status == 0 {
-				writeSession(w, cookie, 604800)
-				http.Redirect(w, r, "/me", http.StatusSeeOther)
+				writeSession(w, cookie, 86400)
+				destination := "/me"
+				if isAdmin { destination = "/admin" }
+				http.Redirect(w, r, destination, http.StatusSeeOther)
 				return
 			}
 		}
 		data.Error = statusMessage(status)
 		if status == http.StatusUnauthorized {
-			data.Error = "Неверное имя пользователя, пароль или веб-ключ."
+			data.Error = "Invalid username or password."
 		}
 		render(w, status, "login", data)
 	default:
@@ -181,6 +193,10 @@ func (s *server) session(w http.ResponseWriter, r *http.Request) (store.Principa
 
 func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	if p, ok := s.session(w, r); ok {
+		if p.IsAdmin {
+			http.Redirect(w, r, "/admin", http.StatusSeeOther)
+			return
+		}
 		s.mePage(w, r, p, http.StatusOK)
 	}
 }
@@ -192,7 +208,7 @@ func (s *server) mePage(w http.ResponseWriter, r *http.Request, p store.Principa
 		return
 	}
 	if !approved {
-		render(w, http.StatusOK, "pending", page{Title: "Ожидает подтверждения"})
+		render(w, http.StatusOK, "pending", page{Title: "Awaiting approval"})
 		return
 	}
 	view, err := s.db.Social(r.Context(), p)
@@ -205,7 +221,7 @@ func (s *server) mePage(w http.ResponseWriter, r *http.Request, p store.Principa
 		http.Error(w, statusMessage(status), status)
 		return
 	}
-	data := page{Title: "Личный кабинет", Social: view}
+	data := page{Title: "Account", Social: view}
 	if status != http.StatusOK {
 		data.Error = statusMessage(status)
 	}
@@ -218,6 +234,10 @@ func (s *server) meAction(w http.ResponseWriter, r *http.Request) {
 	}
 	p, ok := s.session(w, r)
 	if !ok {
+		return
+	}
+	if p.IsAdmin {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 	form, status := readForm(w, r)
@@ -243,61 +263,61 @@ func (s *server) meAction(w http.ResponseWriter, r *http.Request) {
 func statusMessage(status int) string {
 	switch status {
 	case http.StatusBadRequest:
-		return "Проверьте поля и подтвердите действие, если требуется."
+		return "Check the fields and confirm the action if required."
 	case http.StatusForbidden:
-		return "У вас нет прав для этого действия."
+		return "You do not have permission for this action."
 	case http.StatusNotFound:
-		return "Объект не найден или больше недоступен."
+		return "The item was not found or is no longer available."
 	case http.StatusConflict:
-		return "Нельзя выполнить действие в текущем состоянии: возможно, достигнут лимит."
+		return "This action is not available in the current state or a limit has been reached."
 	case http.StatusRequestEntityTooLarge:
-		return "Отправленные данные слишком велики."
+		return "The submitted data is too large."
 	case http.StatusUnsupportedMediaType:
-		return "Неподдерживаемый формат формы."
+		return "Unsupported form format."
 	default:
-		return "Сервис временно недоступен. Попробуйте позднее."
+		return "The service is temporarily unavailable. Please try again later."
 	}
 }
 
 func friendState(state string) string {
 	switch state {
 	case "incoming":
-		return "Входящая заявка"
+		return "Incoming request"
 	case "outgoing":
-		return "Исходящая заявка"
+		return "Outgoing request"
 	default:
-		return "Подтверждённый друг"
+		return "Confirmed friend"
 	}
 }
 
 func friendRemove(state string) string {
 	switch state {
 	case "incoming":
-		return "Отклонить заявку"
+		return "Decline request"
 	case "outgoing":
-		return "Отменить заявку"
+		return "Cancel request"
 	default:
-		return "Удалить друга"
+		return "Remove friend"
 	}
 }
 
 func roomState(state string) string {
 	if state == "invited" {
-		return "Приглашение"
+		return "Invitation"
 	}
-	return "Участник"
+	return "Member"
 }
 
 func routeName(route string) string {
 	switch route {
 	case "public":
-		return "Общий зал"
+		return "Public"
 	case "friend":
-		return "Друг"
+		return "Friend"
 	case "room":
-		return "Комната"
+		return "Room"
 	case "test":
-		return "Тест"
+		return "Test"
 	}
 	return route
 }
@@ -305,17 +325,17 @@ func routeName(route string) string {
 func sendState(state string) string {
 	switch state {
 	case "waiting_sync":
-		return "Ждёт Sync на 3DS"
+		return "Waiting for Sync on 3DS"
 	case "waiting_peer":
-		return "Ждёт синхронизации получателя или доступного места"
+		return "Waiting for the recipient to sync or free space"
 	case "queued":
-		return "В очереди"
+		return "Queued"
 	case "partial":
-		return "Частично в очереди"
+		return "Partially queued"
 	case "expired":
-		return "Срок истёк"
+		return "Expired"
 	case "blocked":
-		return "Отправка больше не разрешена"
+		return "Sending no longer permitted"
 	}
 	return state
 }

@@ -2,8 +2,10 @@ package web
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -51,21 +53,35 @@ func syncRequest() []byte {
 	return b
 }
 
-func setup(t *testing.T) (*store.Store, store.Credentials, store.Credentials) {
+type testCredentials struct {
+	ID int64
+	Token, Username, Password string
+}
+
+func setup(t *testing.T) (*store.Store, testCredentials, testCredentials) {
 	t.Helper()
 	s, err := store.Open(filepath.Join(t.TempDir(), "db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	a, err := s.CreateParticipant(t.Context(), "A")
-	if err != nil {
-		t.Fatal(err)
+	create := func(label string) testCredentials {
+		c := testCredentials{Username: "test_" + label, Password: "secure passphrase"}
+		if err := s.Register(t.Context(), label, c.Username, c.Password); err != nil { t.Fatal(err) }
+		cookie, err := s.LoginPassword(t.Context(), c.Username, c.Password, "")
+		if err != nil { t.Fatal(err) }
+		p, err := s.Session(t.Context(), cookie)
+		if err != nil { t.Fatal(err) }
+		c.ID = p.ID
+		code, err := s.NewPairing(t.Context(), p)
+		if err != nil { t.Fatal(err) }
+		var token [32]byte
+		if _, err := rand.Read(token[:]); err != nil { t.Fatal(err) }
+		c.Token = hex.EncodeToString(token[:])
+		if err := s.ClaimPairing(t.Context(), code, c.Token); err != nil { t.Fatal(err) }
+		return c
 	}
-	b, err := s.CreateParticipant(t.Context(), "B")
-	if err != nil {
-		t.Fatal(err)
-	}
+	a, b := create("A"), create("B")
 	return s, a, b
 }
 
@@ -134,6 +150,8 @@ func send(t *testing.T, f *httptest.Server, r *http.Request, status int) ([]byte
 func TestAdminTestDelivery(t *testing.T) {
 	s, a, b := setup(t)
 	f, origin := edge(t, s, true)
+	_, login := send(t, f, request(t, f, "POST", "/login", "application/x-www-form-urlencoded", origin, "", []byte(url.Values{"username":{"admin"}, "password":{testAdmin}}.Encode())), 303)
+	adminCookie := login.Cookies()[0]
 	payload := fixture()
 	upload := func(origin string, auth bool, p []byte, status int) {
 		t.Helper()
@@ -156,11 +174,11 @@ func TestAdminTestDelivery(t *testing.T) {
 		}
 		r := request(t, f, "POST", "/admin/test-deliveries", m.FormDataContentType(), origin, "", body.Bytes())
 		if auth {
-			r.SetBasicAuth("admin", testAdmin)
+			r.AddCookie(adminCookie)
 		}
 		send(t, f, r, status)
 	}
-	upload(origin, false, payload, 401)
+	upload(origin, false, payload, 303)
 	upload("https://wrong.test", true, payload, 403)
 	upload(origin, true, payload, 409)
 	for _, act := range []string{"test_set&enabled=1", "public_set&enabled=0"} {
@@ -171,7 +189,7 @@ func TestAdminTestDelivery(t *testing.T) {
 	upload(origin, true, payload, 303)
 	upload(origin, true, payload, 409)
 	r := request(t, f, "GET", "/admin", "", "", "", nil)
-	r.SetBasicAuth("admin", testAdmin)
+	r.AddCookie(adminCookie)
 	page, _ := send(t, f, r, 200)
 	if !bytes.Contains(page, []byte("QA &lt;slot&gt;")) || bytes.Contains(page, []byte("sample.slot")) {
 		t.Fatal("admin queue did not safely render the test label")
@@ -227,14 +245,15 @@ func TestProxyTransport(t *testing.T) {
 	r.Host = "wrong.test"
 	r.Header.Set("X-Forwarded-Host", strings.TrimPrefix(origin, "https://"))
 	send(t, f, r, 421)
-	login := func(o, code string, status int) *http.Response {
+	login := func(o, username, password string, status int) *http.Response {
 		t.Helper()
-		_, res := send(t, f, request(t, f, "POST", "/login", "application/x-www-form-urlencoded", o, "", []byte("code="+code)), status)
+		values := url.Values{"username": {username}, "password": {password}}
+		_, res := send(t, f, request(t, f, "POST", "/login", "application/x-www-form-urlencoded", o, "", []byte(values.Encode())), status)
 		return res
 	}
-	login("https://wrong.test", a.WebCode, 403)
-	login(origin, a.Token, 401)
-	res := login(origin, a.WebCode, 303)
+	login("https://wrong.test", a.Username, a.Password, 403)
+	login(origin, a.Username, a.Token, 401)
+	res := login(origin, a.Username, a.Password, 303)
 	cookies := res.Cookies()
 	if len(cookies) != 1 || cookies[0].Name != "__Host-streetless" || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
 		t.Fatalf("missing proxy-safe session options: %v", cookies)

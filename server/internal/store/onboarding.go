@@ -28,6 +28,69 @@ CREATE TABLE pairing_codes (
  consumed_at INTEGER, token_hash BLOB
 );`
 
+const migrationV3 = `
+CREATE TEMP TABLE participant_sequence AS SELECT seq FROM sqlite_sequence WHERE name='participants';
+CREATE TABLE participants_new (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ label TEXT NOT NULL,
+ token_hash BLOB NOT NULL UNIQUE,
+ friend_code TEXT NOT NULL UNIQUE,
+ public_enabled INTEGER NOT NULL DEFAULT 1 CHECK(public_enabled IN (0,1)),
+ test_enabled INTEGER NOT NULL DEFAULT 0 CHECK(test_enabled IN (0,1)),
+ created_at INTEGER NOT NULL,
+ last_sync_at INTEGER,
+ revoked_at INTEGER,
+ username TEXT,
+ password_salt BLOB,
+ password_hash BLOB,
+ approved INTEGER NOT NULL DEFAULT 1 CHECK(approved IN (0,1))
+);
+INSERT INTO participants_new SELECT id,label,token_hash,friend_code,public_enabled,test_enabled,created_at,last_sync_at,revoked_at,username,password_salt,password_hash,approved FROM participants;
+DROP TABLE participants;
+ALTER TABLE participants_new RENAME TO participants;
+UPDATE sqlite_sequence SET seq=MAX(seq,COALESCE((SELECT seq FROM participant_sequence),0)) WHERE name='participants';
+INSERT INTO sqlite_sequence(name,seq) SELECT 'participants',seq FROM participant_sequence WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name='participants');
+DROP TABLE participant_sequence;
+CREATE UNIQUE INDEX participants_active_label ON participants(label) WHERE revoked_at IS NULL;
+CREATE UNIQUE INDEX participants_username ON participants(username) WHERE username IS NOT NULL;
+CREATE TABLE admin_sessions (session_hash BLOB PRIMARY KEY NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id=1), registration TEXT NOT NULL CHECK(registration IN ('open','approval')));
+INSERT INTO settings VALUES(1,'open');
+PRAGMA user_version=3;`
+
+func (s *Store) Registration(ctx context.Context) (string, error) {
+	var mode string
+	err := s.db.QueryRowContext(ctx, "SELECT registration FROM settings WHERE id=1").Scan(&mode)
+	return mode, err
+}
+
+func (s *Store) SetRegistration(ctx context.Context, mode string) error {
+	if mode != "open" && mode != "approval" {
+		return ErrConflict
+	}
+	_, err := s.db.ExecContext(ctx, "UPDATE settings SET registration=? WHERE id=1", mode)
+	return err
+}
+
+func (s *Store) LoginAdmin(ctx context.Context, oldCookie string) (string, error) {
+	var cookie string
+	err := s.mutate(ctx, func(tx *sql.Tx, now int64) error {
+		if old, ok := secretHash(oldCookie); ok {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", old); err != nil { return err }
+			if _, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", old); err != nil { return err }
+		}
+		for {
+			value, hash := makeSecret()
+			result, err := tx.ExecContext(ctx, "INSERT INTO admin_sessions VALUES(?,?) ON CONFLICT DO NOTHING", hash, now+day)
+			if err != nil { return err }
+			n, err := result.RowsAffected()
+			if err != nil { return err }
+			if n != 0 { cookie = value; return nil }
+		}
+	})
+	return cookie, err
+}
+
 func normalizeUsername(username string) string {
 	b := []byte(username)
 	for i, c := range b {
@@ -54,17 +117,63 @@ func validUsername(username string) bool {
 	}
 	return true
 }
+// The deterministic filter rejects common passwords, short repeated patterns,
+// and straight ASCII letter or digit sequences; it cannot guarantee strength.
 func validPassword(password string) bool {
-	return len(password) >= 12 && len(password) <= 128 && utf8.ValidString(password)
+	if len(password) < 8 || len(password) > 128 || !utf8.ValidString(password) { return false }
+	lower := strings.ToLower(password)
+	switch lower {
+	case "password", "password1", "password123", "12345678", "123456789", "1234567890", "qwertyuiop", "qwerty123", "letmein123", "iloveyou", "admin123", "welcome123":
+		return false
+	}
+	runes := []rune(lower)
+	for size := 1; size <= 4 && size <= len(runes)/2; size++ {
+		if len(runes)%size != 0 { continue }
+		repeated := true
+		for i := size; i < len(runes); i++ {
+			if runes[i] != runes[i%size] { repeated = false; break }
+		}
+		if repeated { return false }
+	}
+	ascending, descending := true, true
+	for i, r := range runes {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9') { ascending, descending = false, false; break }
+		if i > 0 {
+			ascending = ascending && r == runes[i-1]+1
+			descending = descending && r == runes[i-1]-1
+		}
+	}
+	return !ascending && !descending
 }
 func passwordHash(password string, salt []byte) []byte {
 	return argon2.IDKey([]byte(password), salt, 3, 64*1024, 1, 32)
 }
 
-func (s *Store) Register(ctx context.Context, label, username, password string, approval bool) error {
+func (s *Store) SetCredentials(ctx context.Context, id int64, username, password string) error {
+	username = normalizeUsername(username)
+	if !validUsername(username) || username == "admin" || !validPassword(password) { return ErrConflict }
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil { return err }
+	hash := passwordHash(password, salt)
+	return s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
+		var revoked sql.NullInt64
+		err := tx.QueryRowContext(ctx, "SELECT revoked_at FROM participants WHERE id=?", id).Scan(&revoked)
+		if errors.Is(err, sql.ErrNoRows) { return ErrNotFound }
+		if err != nil { return err }
+		if revoked.Valid { return ErrConflict }
+		var taken bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM participants WHERE username=? AND id<>?)", username, id).Scan(&taken); err != nil { return err }
+		if taken { return ErrConflict }
+		if _, err := tx.ExecContext(ctx, "UPDATE participants SET username=?,password_salt=?,password_hash=? WHERE id=?", username, salt, hash, id); err != nil { return err }
+		_, err = tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE participant_id=?", id)
+		return err
+	})
+}
+
+func (s *Store) Register(ctx context.Context, label, username, password string) error {
 	label = strings.TrimSpace(label)
 	username = normalizeUsername(username)
-	if !ValidLabel(label) || !validUsername(username) || !validPassword(password) {
+	if !ValidLabel(label) || !validUsername(username) || username == "admin" || !validPassword(password) {
 		return ErrConflict
 	}
 	salt := make([]byte, 16)
@@ -73,6 +182,10 @@ func (s *Store) Register(ctx context.Context, label, username, password string, 
 	}
 	hash := passwordHash(password, salt)
 	return s.mutate(ctx, func(tx *sql.Tx, now int64) error {
+		var mode string
+		if err := tx.QueryRowContext(ctx, "SELECT registration FROM settings WHERE id=1").Scan(&mode); err != nil {
+			return err
+		}
 		var taken bool
 		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM participants WHERE username=? OR (label=? AND revoked_at IS NULL))", username, label).Scan(&taken); err != nil {
 			return err
@@ -86,12 +199,11 @@ func (s *Store) Register(ctx context.Context, label, username, password string, 
 				return err
 			}
 			_, token := makeSecret()
-			_, web := makeSecret()
 			approved := 1
-			if approval {
+			if mode == "approval" {
 				approved = 0
 			}
-			result, err := tx.ExecContext(ctx, `INSERT INTO participants(label,token_hash,web_hash,friend_code,created_at,username,password_salt,password_hash,approved) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`, label, token, web, hex.EncodeToString(friend[:]), now, username, salt, hash, approved)
+			result, err := tx.ExecContext(ctx, `INSERT INTO participants(label,token_hash,friend_code,created_at,username,password_salt,password_hash,approved) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`, label, token, hex.EncodeToString(friend[:]), now, username, salt, hash, approved)
 			if err != nil {
 				return err
 			}
@@ -111,13 +223,14 @@ func createSession(ctx context.Context, tx *sql.Tx, id int64, oldCookie string, 
 		if _, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", old); err != nil {
 			return "", err
 		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", old); err != nil { return "", err }
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM web_sessions WHERE participant_id=? AND (expires_at<=? OR session_hash IN (SELECT session_hash FROM web_sessions WHERE participant_id=? AND expires_at>? ORDER BY expires_at DESC,session_hash DESC LIMIT -1 OFFSET 7))`, id, now, id, now); err != nil {
 		return "", err
 	}
 	for {
 		cookie, h := makeSecret()
-		r, err := tx.ExecContext(ctx, "INSERT INTO web_sessions VALUES(?,?,?) ON CONFLICT DO NOTHING", h, id, now+week)
+		r, err := tx.ExecContext(ctx, "INSERT INTO web_sessions VALUES(?,?,?) ON CONFLICT DO NOTHING", h, id, now+day)
 		if err != nil {
 			return "", err
 		}
@@ -133,7 +246,7 @@ func createSession(ctx context.Context, tx *sql.Tx, id int64, oldCookie string, 
 
 func (s *Store) LoginPassword(ctx context.Context, username, password, oldCookie string) (string, error) {
 	username = normalizeUsername(username)
-	if !validUsername(username) || !validPassword(password) {
+	if !validUsername(username) || len(password) > 128 || !utf8.ValidString(password) {
 		return "", ErrUnauthorized
 	}
 	var id int64

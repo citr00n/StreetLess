@@ -2,11 +2,8 @@ package web
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -22,12 +19,12 @@ import (
 
 func (s *server) admin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		name, password, ok := r.BasicAuth()
-		digest := sha256.Sum256([]byte(password))
-		matched := subtle.ConstantTimeCompare([]byte(name), []byte("admin")) & subtle.ConstantTimeCompare(digest[:], s.cfg.AdminHash[:])
-		if !ok || len(r.Header.Values("Authorization")) != 1 || !lowercaseKey(password) || matched != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Streetless admin", charset="UTF-8"`)
-			apiError(w, http.StatusUnauthorized, "")
+		p, ok := s.session(w, r)
+		if !ok {
+			return
+		}
+		if !p.IsAdmin {
+			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 		if r.Method == http.MethodPost && !s.requireOrigin(w, r) {
@@ -79,7 +76,7 @@ func (c cursors) next(i int, id int64, anchor string) string {
 func (s *server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 	c, ok := readCursors(r.URL.RawQuery)
 	if !ok {
-		s.adminPage(w, r, cursors{}, http.StatusBadRequest, "Некорректный курсор страницы.")
+		s.adminPage(w, r, cursors{}, http.StatusBadRequest, "Invalid page cursor.")
 		return
 	}
 	s.adminPage(w, r, c, http.StatusOK, "")
@@ -96,7 +93,12 @@ func (s *server) adminPage(w http.ResponseWriter, r *http.Request, c cursors, st
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	data := page{Title: "Панель администратора", Error: msg, Admin: view, Now: time.Now(), Pending: pending}
+	registration, err := s.db.Registration(r.Context())
+	if err != nil {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	data := page{Title: "Admin dashboard", Error: msg, Admin: view, Now: time.Now(), Pending: pending, IsAdmin: true, Registration: registration}
 	if n := len(view.Participants); n != 0 && view.MoreParticipants {
 		data.NextParticipants = c.next(0, view.Participants[n-1].ID, "participants")
 	}
@@ -109,6 +111,21 @@ func (s *server) adminPage(w http.ResponseWriter, r *http.Request, c cursors, st
 	render(w, status, "admin", data)
 }
 
+func (s *server) adminSettings(w http.ResponseWriter, r *http.Request) {
+	form, status := readForm(w, r)
+	if status == 0 && (len(form) != 1 || !form.Has("registration") || (form.Get("registration") != "open" && form.Get("registration") != "approval")) {
+		status = http.StatusBadRequest
+	}
+	if status == 0 {
+		status = storeStatus(s.db.SetRegistration(r.Context(), form.Get("registration")))
+	}
+	if status != 0 {
+		s.adminError(w, r, status, "")
+		return
+	}
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+}
+
 func (s *server) adminError(w http.ResponseWriter, r *http.Request, status int, msg string) {
 	if msg == "" {
 		msg = statusMessage(status)
@@ -119,29 +136,27 @@ func (s *server) adminError(w http.ResponseWriter, r *http.Request, status int, 
 	}
 	s.adminPage(w, r, cursors{}, status, msg)
 }
-
-func (s *server) adminCreate(w http.ResponseWriter, r *http.Request) {
+func (s *server) adminCredentials(w http.ResponseWriter, r *http.Request) {
+	id, ok := positiveID(r.PathValue("id"))
 	form, status := readForm(w, r)
-	label := strings.TrimSpace(form.Get("label"))
-	if status == 0 && (len(form) != 1 || !store.ValidLabel(label)) {
+	if status == 0 && (!ok || len(form) != 3 || !form.Has("username") || !form.Has("password") || form.Get("confirm") != "yes") {
 		status = http.StatusBadRequest
 	}
-	if status != 0 {
-		s.adminError(w, r, status, "")
-		return
-	}
-	cred, err := s.db.CreateParticipant(r.Context(), label)
-	if err != nil {
-		msg := ""
-		if errors.Is(err, store.ErrConflict) {
-			msg = "Активный участник с такой подписью уже существует."
+	if status == 0 {
+		if !s.passwordSlot() {
+			status = http.StatusTooManyRequests
+		} else {
+			status = storeStatus(s.db.SetCredentials(r.Context(), id, form.Get("username"), form.Get("password")))
+			<-s.passwordSlots
 		}
-		s.adminError(w, r, storeStatus(err), msg)
+	}
+	if status != 0 {
+		s.adminError(w, r, status, "Could not set credentials. Use a unique username and a password of 8 to 128 UTF-8 bytes that is not common or a repeated character.")
 		return
 	}
-	config := fmt.Sprintf("host=%s\nipv4=%s\ntoken=%s\nport=%d\n", s.cfg.Host, s.cfg.IPv4, cred.Token, s.cfg.Port)
-	render(w, http.StatusCreated, "credentials", page{Title: "Приглашение создано", ID: cred.ID, Label: cred.Label, ClientConfig: config, WebCode: cred.WebCode})
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
+
 
 func adminConfirm(w http.ResponseWriter, r *http.Request) (int64, int) {
 	id, ok := positiveID(r.PathValue("id"))
@@ -155,23 +170,6 @@ func adminConfirm(w http.ResponseWriter, r *http.Request) (int64, int) {
 	return id, status
 }
 
-func (s *server) adminResetWeb(w http.ResponseWriter, r *http.Request) {
-	id, status := adminConfirm(w, r)
-	if status != 0 {
-		s.adminError(w, r, status, "")
-		return
-	}
-	code, err := s.db.ResetWeb(r.Context(), id)
-	if err != nil {
-		msg := ""
-		if errors.Is(err, store.ErrConflict) {
-			msg = "Нельзя выдать веб-ключ отозванному участнику."
-		}
-		s.adminError(w, r, storeStatus(err), msg)
-		return
-	}
-	render(w, http.StatusOK, "credentials", page{Title: "Новый веб-ключ", ID: id, WebCode: code})
-}
 
 func (s *server) adminRevoke(w http.ResponseWriter, r *http.Request) {
 	s.adminMutation(w, r, s.db.Revoke)
@@ -313,7 +311,7 @@ func (s *server) adminTestDelivery(w http.ResponseWriter, r *http.Request) {
 	if status != 0 {
 		msg := ""
 		if status == http.StatusBadRequest {
-			msg = "Некорректная форма или нативный слот CECD."
+			msg = "Invalid form or native CECD slot."
 		}
 		s.adminError(w, r, status, msg)
 		return
@@ -321,9 +319,9 @@ func (s *server) adminTestDelivery(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.db.CreateTestDelivery(r.Context(), up.recipient, up.label, up.title, up.slot, up.stats); err != nil {
 		msg := ""
 		if errors.Is(err, store.ErrTestDisabled) {
-			msg = "Участник не разрешил тестовые проходы."
+			msg = "The participant has not enabled test passes."
 		} else if errors.Is(err, store.ErrConflict) {
-			msg = "Достигнут лимит ожидающих тестовых доставок."
+			msg = "The pending test delivery limit has been reached."
 		}
 		s.adminError(w, r, storeStatus(err), msg)
 		return

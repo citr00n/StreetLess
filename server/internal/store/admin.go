@@ -126,7 +126,7 @@ func (s *Store) Admin(ctx context.Context, participantsBefore, roomsBefore, queu
 			}
 			v.ExpiresAt = time.Unix(created+ttl, 0).UTC()
 			return v, err
-		}, `SELECT d.id,coalesce(a.label,'Администратор'),b.label,d.route,coalesce(r.name,''),coalesce(d.test_label,''),d.title,length(d.slot),d.created_at
+		}, `SELECT d.id,coalesce(a.label,'Administrator'),b.label,d.route,coalesce(r.name,''),coalesce(d.test_label,''),d.title,length(d.slot),d.created_at
 		 FROM deliveries d LEFT JOIN participants a ON a.id=d.sender_id JOIN participants b ON b.id=d.recipient_id
 		 LEFT JOIN rooms r ON r.id=d.room_id WHERE d.id<? AND d.created_at>CASE WHEN d.route='test' THEN ? ELSE ? END
 		 ORDER BY d.id DESC LIMIT 51`, cursor(queueBefore), now-day, now-week)

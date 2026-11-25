@@ -55,18 +55,28 @@ func newTestStore(t *testing.T) (*Store, *time.Time, string) {
 	t.Cleanup(func() { s.Close() })
 	return s, &now, path
 }
+type Credentials struct {
+	ID int64
+	Label, Token, Username, Password string
+}
+
 
 func testPeer(t *testing.T, s *Store, label string) (Principal, Credentials) {
 	t.Helper()
 	ctx := t.Context()
-	c, err := s.CreateParticipant(ctx, label)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := s.Bearer(ctx, c.Token)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := Credentials{Label: label, Username: "test_" + label, Password: "secure passphrase"}
+	if err := s.Register(ctx, label, c.Username, c.Password); err != nil { t.Fatal(err) }
+	cookie, err := s.LoginPassword(ctx, c.Username, c.Password, "")
+	if err != nil { t.Fatal(err) }
+	p, err := s.Session(ctx, cookie)
+	if err != nil { t.Fatal(err) }
+	c.ID = p.ID
+	code, err := s.NewPairing(ctx, p)
+	if err != nil { t.Fatal(err) }
+	c.Token, _ = makeSecret()
+	if err := s.ClaimPairing(ctx, code, c.Token); err != nil { t.Fatal(err) }
+	p, err = s.Bearer(ctx, c.Token)
+	if err != nil { t.Fatal(err) }
 	return p, c
 }
 

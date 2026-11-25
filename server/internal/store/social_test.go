@@ -42,7 +42,7 @@ func TestSocialRoutes(t *testing.T) {
 	old, newer := titleSlot(t, 2, 'o'), titleSlot(t, 2, 'n')
 	recv := titleSlot(t, 1, 0)
 	mustSync(t, s, a, old)
-	cookie, err := s.Login(t.Context(), ca.WebCode, "")
+	cookie, err := s.LoginPassword(t.Context(), ca.Username, ca.Password, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestWebCredentialReset(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	a, creds := testPeer(t, s, "A")
 	ctx := t.Context()
-	cookie, err := s.Login(ctx, creds.WebCode, "")
+	cookie, err := s.LoginPassword(ctx, creds.Username, creds.Password, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestWebCredentialReset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := s.ResetWeb(ctx, a.ID)
+	err = s.SetCredentials(ctx, a.ID, "new_user", "new secure passphrase")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,10 +118,10 @@ func TestWebCredentialReset(t *testing.T) {
 	if err := s.Act(ctx, p, Action{Kind: "public_set", Enabled: false}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatal("revoked session mutation accepted")
 	}
-	if _, err := s.Login(ctx, creds.WebCode, ""); !errors.Is(err, ErrUnauthorized) {
-		t.Fatal("old web key remained authorized")
+	if _, err := s.LoginPassword(ctx, creds.Username, creds.Password, ""); !errors.Is(err, ErrUnauthorized) {
+		t.Fatal("old login remained authorized")
 	}
-	if _, err := s.Login(ctx, code, ""); err != nil {
+	if _, err := s.LoginPassword(ctx, "new_user", "new secure passphrase", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Bearer(ctx, creds.Token); err != nil {

@@ -70,7 +70,7 @@ func (s *server) passwordSlot() bool {
 }
 
 func (s *server) register(w http.ResponseWriter, r *http.Request) {
-	data := page{Title: "Регистрация"}
+	data := page{Title: "Register"}
 	switch r.Method {
 	case http.MethodGet:
 		render(w, http.StatusOK, "register", data)
@@ -90,7 +90,7 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 				if !s.passwordSlot() {
 					status = http.StatusTooManyRequests
 				} else {
-					status = storeStatus(s.db.Register(r.Context(), form.Get("label"), form.Get("username"), form.Get("password"), s.cfg.Registration == "approval"))
+					status = storeStatus(s.db.Register(r.Context(), form.Get("label"), form.Get("username"), form.Get("password")))
 					<-s.passwordSlots
 				}
 			}
@@ -99,7 +99,7 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		data.Error = "Не удалось создать учётную запись. Проверьте данные и выберите уникальные имя и подпись."
+		data.Error = "Could not create account. Choose a unique username and label, and a password of 8 to 128 UTF-8 bytes that is not common or a repeated character."
 		render(w, status, "register", data)
 	default:
 		methodError(w, "GET, POST")
@@ -112,6 +112,10 @@ func (s *server) pairNew(w http.ResponseWriter, r *http.Request) {
 	}
 	p, ok := s.session(w, r)
 	if !ok {
+		return
+	}
+	if p.IsAdmin {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 	form, status := readForm(w, r)
@@ -133,7 +137,7 @@ func (s *server) pairNew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	render(w, http.StatusOK, "pairing", page{Title: "Подключение 3DS", PairCode: code, PairQR: template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png)), PairHost: s.cfg.Host, PairIPv4: s.cfg.IPv4, PairPort: s.cfg.Port})
+	render(w, http.StatusOK, "pairing", page{Title: "Connect 3DS", PairCode: code, PairQR: template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png)), PairHost: s.cfg.Host, PairIPv4: s.cfg.IPv4, PairPort: s.cfg.Port})
 }
 func (s *server) pairClaim(w http.ResponseWriter, r *http.Request) {
 	if !s.limits.allow(r, "pair", 30, 300) {

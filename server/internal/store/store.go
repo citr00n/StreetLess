@@ -37,11 +37,8 @@ type Store struct {
 }
 type Principal struct {
 	ID      int64
+	IsAdmin bool
 	session []byte
-}
-type Credentials struct {
-	ID                    int64
-	Label, Token, WebCode string
 }
 
 func Open(path string, now func() time.Time) (*Store, error) {
@@ -76,6 +73,11 @@ func Open(path string, now func() time.Time) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("enable SQLite WAL: %w", errors.Join(err, errors.New(journal)))
 	}
+	// Rebuilding the participants table must not cascade-delete existing data.
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		db.Close()
+		return nil, err
+	}
 	err = s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
 		var version int
 		if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
@@ -88,14 +90,25 @@ func Open(path string, now func() time.Time) (*Store, error) {
 			}
 			fallthrough
 		case 1:
-			_, err := tx.ExecContext(ctx, migrationV2+"\nPRAGMA user_version=2;")
-			return err
+			if _, err := tx.ExecContext(ctx, migrationV2); err != nil {
+				return err
+			}
+			fallthrough
 		case 2:
+			if _, err := tx.ExecContext(ctx, migrationV3); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, "UPDATE web_sessions SET expires_at=MIN(expires_at, ?)", s.now().Unix()+day)
+			return err
+		case 3:
 			return nil
 		default:
 			return fmt.Errorf("unsupported SQLite schema version %d", version)
 		}
 	})
+	if _, pragmaErr := db.ExecContext(ctx, "PRAGMA foreign_keys=ON"); pragmaErr != nil && err == nil {
+		err = pragmaErr
+	}
 	if err == nil {
 		err = s.Clean(ctx)
 	}
@@ -188,42 +201,31 @@ func (s *Store) Session(ctx context.Context, cookie string) (Principal, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT p.id FROM web_sessions w JOIN participants p ON p.id=w.participant_id
 		WHERE w.session_hash=? AND w.expires_at>? AND p.revoked_at IS NULL`, hash, s.now().Unix()).Scan(&p.ID)
 	if errors.Is(err, sql.ErrNoRows) {
+		err = s.db.QueryRowContext(ctx, "SELECT 1 FROM admin_sessions WHERE session_hash=? AND expires_at>?", hash, s.now().Unix()).Scan(&p.ID)
+		if err == nil {
+			p.ID = 0
+			p.IsAdmin = true
+		}
+	}
+	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrUnauthorized
 	}
 	return p, err
 }
 
-func (s *Store) Login(ctx context.Context, webCode, oldCookie string) (string, error) {
-	hash, ok := secretHash(webCode)
-	if !ok {
-		return "", ErrUnauthorized
-	}
-	var cookie string
-	err := s.mutate(ctx, func(tx *sql.Tx, now int64) error {
-		var id int64
-		err := tx.QueryRowContext(ctx, "SELECT id FROM participants WHERE web_hash=? AND revoked_at IS NULL", hash).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrUnauthorized
-		}
-		if err != nil {
-			return err
-		}
-		cookie, err = createSession(ctx, tx, id, oldCookie, now)
-		return err
-	})
-	if err != nil {
-		return "", err
-	}
-	return cookie, nil
-}
 
 func (s *Store) Logout(ctx context.Context, cookie string) error {
 	hash, ok := secretHash(cookie)
 	if !ok {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", hash)
-	return err
+	return s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", hash); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", hash)
+		return err
+	})
 }
 
 func ValidLabel(label string) bool {
@@ -238,75 +240,6 @@ func ValidLabel(label string) bool {
 	return true
 }
 
-func (s *Store) CreateParticipant(ctx context.Context, label string) (Credentials, error) {
-	c := Credentials{Label: label}
-	if !ValidLabel(label) {
-		return c, ErrConflict
-	}
-	err := s.mutate(ctx, func(tx *sql.Tx, now int64) error {
-		var taken bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM participants WHERE label=? AND revoked_at IS NULL)", label).Scan(&taken); err != nil {
-			return err
-		}
-		if taken {
-			return ErrConflict
-		}
-		for {
-			var t, w []byte
-			var friend [8]byte
-			rand.Read(friend[:])
-			c.Token, t = makeSecret()
-			c.WebCode, w = makeSecret()
-			err := tx.QueryRowContext(ctx, `INSERT INTO participants(label,token_hash,web_hash,friend_code,created_at) VALUES(?,?,?,?,?)
-			 ON CONFLICT DO NOTHING RETURNING id`, label, t, w, hex.EncodeToString(friend[:]), now).Scan(&c.ID)
-			if !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
-		}
-	})
-	if err != nil {
-		return Credentials{}, err
-	}
-	return c, nil
-}
-
-func (s *Store) ResetWeb(ctx context.Context, id int64) (string, error) {
-	var code string
-	err := s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
-		var revoked sql.NullInt64
-		err := tx.QueryRowContext(ctx, "SELECT revoked_at FROM participants WHERE id=?", id).Scan(&revoked)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return err
-		}
-		if revoked.Valid {
-			return ErrConflict
-		}
-		for {
-			var h []byte
-			code, h = makeSecret()
-			r, err := tx.ExecContext(ctx, "UPDATE participants SET web_hash=? WHERE id=? AND NOT EXISTS (SELECT 1 FROM participants WHERE web_hash=?)", h, id, h)
-			if err != nil {
-				return err
-			}
-			n, err := r.RowsAffected()
-			if err != nil {
-				return err
-			}
-			if n != 0 {
-				break
-			}
-		}
-		_, err = tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE participant_id=?", id)
-		return err
-	})
-	if err != nil {
-		return "", err
-	}
-	return code, nil
-}
 
 func (s *Store) Revoke(ctx context.Context, id int64) error {
 	return s.mutate(ctx, func(tx *sql.Tx, now int64) error {
@@ -345,6 +278,7 @@ func (s *Store) Clean(ctx context.Context) error {
 			{"DELETE FROM matches WHERE matched_at<=?", now - day},
 			{"DELETE FROM public_receipts WHERE created_at<=?", now - day},
 			{"DELETE FROM web_sessions WHERE expires_at<=?", now},
+			{"DELETE FROM admin_sessions WHERE expires_at<=?", now},
 			{"DELETE FROM pairing_codes WHERE expires_at<=?", now},
 		} {
 			if _, err := tx.ExecContext(ctx, q.statement, q.cutoff); err != nil {
