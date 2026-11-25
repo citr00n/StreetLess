@@ -1,5 +1,6 @@
 #include <3ds.h>
 
+#include "background_control.h"
 #include "export.h"
 #include <string.h>
 #include "config.h"
@@ -72,8 +73,116 @@ static bool enter_debug_pin(char pin[5]) {
     return true;
 }
 
+static bool stop_background_for_action(void) {
+    Result detail;
+    BackgroundStatus status = background_status(&detail);
+    if (status == BACKGROUND_ABSENT) return true;
+    if (status == BACKGROUND_UNCERTAIN) {
+        char message[256];
+        snprintf(message, sizeof(message),
+            "Background state is uncertain (%08lx).\n"
+            "Cannot safely use StreetPass. Retry status,\n"
+            "or power off and reopen Streetless promptly.",
+            (unsigned long)(u32)detail);
+        ui_message(message);
+        return false;
+    }
+    if (!ui_confirm("Stop background", NULL,
+            "Background sync must stop before this\n"
+            "action. Its current exchange will finish\n"
+            "or abort and restore StreetPass first.")) return false;
+    consoleClear();
+    puts("Streetless / Background\n\nStopping safely; please wait...");
+    gfxFlushBuffers();
+    if (!background_stop(&detail)) {
+        char message[192];
+        snprintf(message, sizeof(message),
+            "Stop was not confirmed (%08lx).\n"
+            "No manual StreetPass operation is allowed.\n"
+            "Retry stop or restart the console.",
+            (unsigned long)(u32)detail);
+        ui_message(message);
+        return false;
+    }
+    return true;
+}
+
+static void background_menu(bool debug, bool valid, bool sync_disabled) {
+    Result detail;
+    BackgroundStatus status = background_status(&detail);
+    if (status == BACKGROUND_UNCERTAIN) {
+        (void)stop_background_for_action();
+        return;
+    }
+    if (status != BACKGROUND_ABSENT) {
+        const char *state = status == BACKGROUND_RETRY ? "Running; last sync needs retry." :
+                            status == BACKGROUND_STOPPING ? "Stopping." : "Running.";
+        if (!ui_confirm("Background sync", state,
+                "Stop background sync? The current exchange\n"
+                "must finish or abort before it stops.")) return;
+        consoleClear();
+        puts("Streetless / Background\n\nStopping safely; please wait...");
+        gfxFlushBuffers();
+        if (background_stop(&detail)) ui_message("Background sync stopped safely.");
+        else {
+            char message[160];
+            snprintf(message, sizeof(message),
+                "Stop not confirmed (%08lx).\n"
+                "Retry, or restart the console before\n"
+                "using StreetPass manually.", (unsigned long)(u32)detail);
+            ui_message(message);
+        }
+        return;
+    }
+    if (debug) {
+        ui_message("Background sync requires production HTTPS.\nExit debug mode before starting it.");
+        return;
+    }
+    if (!valid) {
+        ui_message("Pair the console before starting\nbackground sync.");
+        return;
+    }
+    if (sync_disabled) {
+        ui_message("StreetPass was not restored.\nRestart the console before background sync.");
+        return;
+    }
+    if (!ui_confirm("Start background sync", NULL,
+            "Selected outgoing passes will be sent\n"
+            "periodically using your allowed routes.\n"
+            "Sync works only while the console is awake,\n"
+            "including after Streetless is closed.\n"
+            "Start again manually after each boot.\n"
+            "Previously queued passes cannot be recalled.")) return;
+    consoleClear();
+    puts("Streetless / Background\n\nStarting; please wait...");
+    gfxFlushBuffers();
+    if (background_start(&detail)) {
+        ui_message("Background service connected.\n"
+                   "Close Streetless; sync runs while awake.\n"
+                   "Open Background sync to check or stop it.");
+    } else {
+        char message[300];
+        if ((u32)detail == 0xD900182E)
+            snprintf(message, sizeof(message), "Luma3DS 13 or newer is required.");
+        else if ((u32)detail == 0xD900182F)
+            snprintf(message, sizeof(message),
+                "Background module is not installed.\n"
+                "Install 0004013000F5A302.cxi in\n"
+                "/luma/sysmodules/ and enable external\n"
+                "modules in Luma configuration.");
+        else
+            snprintf(message, sizeof(message),
+                "Start failed or was not confirmed (%08lx).\n"
+                "Check Luma external module loading and\n"
+                "the installed module. Retry status; if\n"
+                "uncertain, power off and reopen promptly.",
+                (unsigned long)(u32)detail);
+        ui_message(message);
+    }
+}
+
 static void run_menu(Config *config, bool valid) {
-    static const char *const items[] = {"Sync", "Privacy", "Friends", "Rooms", "Outgoing", "Outgoing games", "Pair console", "Debug mode", "Export local slot"};
+    static const char *const items[] = {"Sync", "Privacy", "Friends", "Rooms", "Outgoing", "Outgoing games", "Pair console", "Debug mode", "Background sync", "Export local slot"};
     static const SocialPage pages[] = {SOCIAL_PRIVACY, SOCIAL_FRIENDS, SOCIAL_ROOMS, SOCIAL_OUTGOING};
     Http http;
     char pin[5] = "";
@@ -82,7 +191,7 @@ static void run_menu(Config *config, bool valid) {
     unsigned selected = valid ? 0 : 6;
     bool consented = false, sync_disabled = false;
     while (ui_running()) {
-        unsigned count = debug ? 9 : 8;
+        unsigned count = debug ? 10 : 9;
         consoleClear();
         printf("Streetless\n\n%s\n\n", debug ? "DEBUG: plaintext HTTP" : "Production: verified HTTPS");
         for (unsigned i = 0; i < count; ++i)
@@ -109,12 +218,15 @@ static void run_menu(Config *config, bool valid) {
                 if (connected) { http_close(&http); connected = false; }
                 if (valid) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
             } else if (selected == 8) {
+                background_menu(debug, valid, sync_disabled);
+            } else if (selected == 9) {
                 if (sync_disabled) ui_message("Restart the console before using CECD again.");
-                else if (!export_run()) sync_disabled = true;
+                else if (stop_background_for_action() && !export_run()) sync_disabled = true;
             } else if (selected == 5) {
                 if (sync_disabled) ui_message("Restart the console before using CECD again.");
-                else if (!selection_menu()) sync_disabled = true;
+                else if (stop_background_for_action() && !selection_menu()) sync_disabled = true;
             } else if (selected == 6) {
+                if (!stop_background_for_action()) continue;
                 if (connected) { http_close(&http); connected = false; }
                 if (pair_run(config, debug ? pin : NULL)) valid = true;
                 if (valid) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
@@ -134,11 +246,12 @@ static void run_menu(Config *config, bool valid) {
                        "prevent receipt without an outgoing pass.\n"
                        "Already staged or queued data cannot be\n"
                        "retracted by this local setting.")) {
+                if (!stop_background_for_action()) continue;
                 consented = true;
                 consoleClear();
                 puts("Streetless / Sync\n");
                 gfxFlushBuffers();
-                sync_disabled = sync_run(&http, config) < 0;
+                sync_disabled = sync_run(&http, config) == -1;
                 puts("\nA/B Main menu   START Exit");
                 wait_for_back();
             }

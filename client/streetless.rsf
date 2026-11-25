@@ -87,6 +87,7 @@ AccessControlInfo:
     - hid:USER
     - ndm:u
     - ps:ps
+    - slss:bg
     - soc:U
     - y2r:u
 SystemControlInfo:
