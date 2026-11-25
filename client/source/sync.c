@@ -1,6 +1,7 @@
 #include "sync.h"
 #include "cecd.h"
 #include "journal.h"
+#include "selection.h"
 #include <mbedtls/md.h>
 #include <mbedtls/platform_util.h>
 #include <stdlib.h>
@@ -124,6 +125,12 @@ static void reject_slots(Http *http, const SLReject *items, size_t count) {
 }
 
 int sync_run(Http *http, const Config *config) {
+    Selection selection;
+    if (!selection_load(&selection)) {
+        puts("Outgoing preferences are invalid or unavailable.");
+        puts("No passes sent; repair outgoing.bin on SD.");
+        return 0;
+    }
     Handle service;
     Result rc = cecd_open(&service);
     if (R_FAILED(rc)) {
@@ -167,7 +174,7 @@ int sync_run(Http *http, const Config *config) {
         titles[title_count] = box->limits;
         titles[title_count].mode = slot->mode;
         matched[title_count++] = box;
-        capacity += 28 + (slot->mode == 1 ? 0 : slot->size);
+        capacity += 28 + (slot->mode == 1 || !selection_allows(&selection, slot->title) ? 0 : slot->size);
     }
     request = malloc(capacity);
     response = malloc(SL_REPLY_MAX);
@@ -183,7 +190,7 @@ int sync_run(Http *http, const Config *config) {
         if (index < 0) continue;
         SLTitle *title = &titles[index];
         offset += 28;
-        if (!slot->size || slot->mode == 1) continue;
+        if (!slot->size || slot->mode == 1 || !selection_allows(&selection, slot->title)) continue;
         uint8_t *data = request + offset;
         IPC("reading local outbox", cecd_get_slot(service, slot, data));
         SLStats stats;

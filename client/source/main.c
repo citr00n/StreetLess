@@ -6,6 +6,7 @@
 #include "http.h"
 #include "pair.h"
 #include "social.h"
+#include "selection.h"
 #include "sync.h"
 #include "ui.h"
 
@@ -72,16 +73,16 @@ static bool enter_debug_pin(char pin[5]) {
 }
 
 static void run_menu(Config *config, bool valid) {
-    static const char *const items[] = {"Sync", "Privacy", "Friends", "Rooms", "Outgoing", "Pair console", "Debug mode", "Export local slot"};
+    static const char *const items[] = {"Sync", "Privacy", "Friends", "Rooms", "Outgoing", "Outgoing games", "Pair console", "Debug mode", "Export local slot"};
     static const SocialPage pages[] = {SOCIAL_PRIVACY, SOCIAL_FRIENDS, SOCIAL_ROOMS, SOCIAL_OUTGOING};
     Http http;
     char pin[5] = "";
     bool debug = false;
     bool connected = valid && http_open(&http, config, "romfs:/certs.pem", NULL);
-    unsigned selected = valid ? 0 : 5;
+    unsigned selected = valid ? 0 : 6;
     bool consented = false, sync_disabled = false;
     while (ui_running()) {
-        unsigned count = debug ? 8 : 7;
+        unsigned count = debug ? 9 : 8;
         consoleClear();
         printf("Streetless\n\n%s\n\n", debug ? "DEBUG: plaintext HTTP" : "Production: verified HTTPS");
         for (unsigned i = 0; i < count; ++i)
@@ -92,7 +93,7 @@ static void run_menu(Config *config, bool valid) {
         if (keys & KEY_UP) selected = (selected + count - 1) % count;
         else if (keys & KEY_DOWN) selected = (selected + 1) % count;
         else if (keys & KEY_A) {
-            if (selected == 6) {
+            if (selected == 7) {
                 if (debug) {
                     consoleClear();
                     puts("Debug mode\n\nA Re-enter server PIN\nX Return to production HTTPS\nB Cancel");
@@ -107,10 +108,13 @@ static void run_menu(Config *config, bool valid) {
                 }
                 if (connected) { http_close(&http); connected = false; }
                 if (valid) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
-            } else if (selected == 7) {
+            } else if (selected == 8) {
                 if (sync_disabled) ui_message("Restart the console before using CECD again.");
                 else if (!export_run()) sync_disabled = true;
             } else if (selected == 5) {
+                if (sync_disabled) ui_message("Restart the console before using CECD again.");
+                else if (!selection_menu()) sync_disabled = true;
+            } else if (selected == 6) {
                 if (connected) { http_close(&http); connected = false; }
                 if (pair_run(config, debug ? pin : NULL)) valid = true;
                 if (valid) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
@@ -124,10 +128,12 @@ static void run_menu(Config *config, bool valid) {
             } else if (sync_disabled) {
                 ui_message("CECD could not return to normal operation.\nRestart the console before syncing again.");
             } else if (consented || ui_confirm("Sync", NULL,
-                       "Sync sends eligible game passes through\n"
-                       "the routes you allow. The public hall allows\n"
-                       "at most 5 incoming passes per 24 hours.\n"
-                       "Some games require a two-way exchange.")) {
+                       "Sync sends selected game passes through\n"
+                       "the routes you allow. New games default off\n"
+                       "after saving Outgoing games. Mode 0 may\n"
+                       "prevent receipt without an outgoing pass.\n"
+                       "Already staged or queued data cannot be\n"
+                       "retracted by this local setting.")) {
                 consented = true;
                 consoleClear();
                 puts("Streetless / Sync\n");
