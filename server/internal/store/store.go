@@ -79,7 +79,7 @@ func Open(path string, now func() time.Time) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	err = s.mutate(ctx, func(tx *sql.Tx, now int64) error {
+	err = s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
 		var version int
 		if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 			return err
@@ -110,22 +110,23 @@ func Open(path string, now func() time.Time) (*Store, error) {
 			); PRAGMA user_version=4;`); err != nil {
 				return err
 			}
-			var hasAdminSessions bool
-			if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM admin_sessions WHERE expires_at>?)", now).Scan(&hasAdminSessions); err != nil {
-				return err
-			}
-			if hasAdminSessions {
-				if err := ensureAdminParticipant(ctx, tx, now); err != nil {
-					return err
-				}
-			}
 			fallthrough
 		case 4:
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE participants DROP COLUMN test_enabled; PRAGMA user_version=5"); err != nil {
 				return err
 			}
-			return nil
+			fallthrough
 		case 5:
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE participants ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1));
+				ALTER TABLE participants ADD COLUMN is_synthetic INTEGER NOT NULL DEFAULT 0 CHECK(is_synthetic IN (0,1));
+				UPDATE participants SET is_synthetic=1 WHERE id IN (SELECT participant_id FROM administrator_account);
+				DROP TABLE administrator_account;
+				DROP TABLE admin_sessions;
+				PRAGMA user_version=6;`); err != nil {
+				return err
+			}
+			return nil
+		case 6:
 			return nil
 		default:
 			return fmt.Errorf("unsupported SQLite schema version %d", version)
@@ -173,11 +174,7 @@ func active(ctx context.Context, tx *sql.Tx, p Principal, now int64) error {
 	if p.session != nil {
 		// The session is rechecked in the write transaction, so a reset/logout
 		// racing a browser action can't leave the old credential usable.
-		if p.IsAdmin {
-			query += " AND EXISTS(SELECT 1 FROM admin_sessions s JOIN administrator_account a ON a.participant_id=participants.id WHERE s.session_hash=? AND s.expires_at>?)"
-		} else {
-			query += " AND EXISTS(SELECT 1 FROM web_sessions WHERE participant_id=participants.id AND session_hash=? AND expires_at>?)"
-		}
+		query += " AND EXISTS(SELECT 1 FROM web_sessions WHERE participant_id=participants.id AND session_hash=? AND expires_at>?)"
 		args = append(args, p.session, now)
 	}
 	err := tx.QueryRowContext(ctx, query, args...).Scan(&id)
@@ -231,17 +228,8 @@ func (s *Store) Session(ctx context.Context, cookie string) (Principal, error) {
 		return Principal{}, ErrUnauthorized
 	}
 	p := Principal{session: hash}
-	err := s.db.QueryRowContext(ctx, `SELECT p.id FROM web_sessions w JOIN participants p ON p.id=w.participant_id
-		WHERE w.session_hash=? AND w.expires_at>? AND p.revoked_at IS NULL`, hash, s.now().Unix()).Scan(&p.ID)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = s.db.QueryRowContext(ctx, `SELECT p.id FROM admin_sessions s
-			JOIN administrator_account a ON a.id=1
-			JOIN participants p ON p.id=a.participant_id
-			WHERE s.session_hash=? AND s.expires_at>? AND p.revoked_at IS NULL`, hash, s.now().Unix()).Scan(&p.ID)
-		if err == nil {
-			p.IsAdmin = true
-		}
-	}
+	err := s.db.QueryRowContext(ctx, `SELECT p.id,p.is_admin FROM web_sessions w JOIN participants p ON p.id=w.participant_id
+		WHERE w.session_hash=? AND w.expires_at>? AND p.revoked_at IS NULL`, hash, s.now().Unix()).Scan(&p.ID, &p.IsAdmin)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrUnauthorized
 	}
@@ -254,10 +242,7 @@ func (s *Store) Logout(ctx context.Context, cookie string) error {
 		return nil
 	}
 	return s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", hash); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", hash)
+		_, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", hash)
 		return err
 	})
 }
@@ -277,7 +262,7 @@ func ValidLabel(label string) bool {
 func (s *Store) Revoke(ctx context.Context, id int64) error {
 	return s.mutate(ctx, func(tx *sql.Tx, now int64) error {
 		var administrator bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM administrator_account WHERE participant_id=?)", id).Scan(&administrator); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM participants WHERE id=? AND is_admin=1)", id).Scan(&administrator); err != nil {
 			return err
 		}
 		if administrator {
@@ -318,7 +303,6 @@ func (s *Store) Clean(ctx context.Context) error {
 			{"DELETE FROM matches WHERE matched_at<=?", now - day},
 			{"DELETE FROM public_receipts WHERE created_at<=?", now - day},
 			{"DELETE FROM web_sessions WHERE expires_at<=?", now},
-			{"DELETE FROM admin_sessions WHERE expires_at<=?", now},
 			{"DELETE FROM pairing_codes WHERE expires_at<=?", now},
 		} {
 			if _, err := tx.ExecContext(ctx, q.statement, q.cutoff); err != nil {

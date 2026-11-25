@@ -72,69 +72,6 @@ func (s *Store) SetRegistration(ctx context.Context, mode string) error {
 	return err
 }
 
-// The administrator has a dedicated participant, separate from any legacy
-// participant named admin. Only admin-password sessions grant the role.
-func ensureAdminParticipant(ctx context.Context, tx *sql.Tx, now int64) error {
-	var participantID int64
-	err := tx.QueryRowContext(ctx, "SELECT participant_id FROM administrator_account WHERE id=1").Scan(&participantID)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	for {
-		var friend [8]byte
-		if _, err := rand.Read(friend[:]); err != nil {
-			return err
-		}
-		code := hex.EncodeToString(friend[:])
-		_, token := makeSecret()
-		err = tx.QueryRowContext(ctx, `INSERT INTO participants(label,token_hash,friend_code,created_at)
-			VALUES(?,?,?,?) ON CONFLICT DO NOTHING RETURNING id`, "Admin-"+code, token, code, now).Scan(&participantID)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO administrator_account VALUES(1,?)", participantID)
-		return err
-	}
-}
-
-func (s *Store) LoginAdmin(ctx context.Context, oldCookie string) (string, error) {
-	var cookie string
-	err := s.mutate(ctx, func(tx *sql.Tx, now int64) error {
-		if err := ensureAdminParticipant(ctx, tx, now); err != nil {
-			return err
-		}
-		if old, ok := secretHash(oldCookie); ok {
-			if _, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", old); err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", old); err != nil {
-				return err
-			}
-		}
-		for {
-			value, hash := makeSecret()
-			result, err := tx.ExecContext(ctx, "INSERT INTO admin_sessions VALUES(?,?) ON CONFLICT DO NOTHING", hash, now+day)
-			if err != nil {
-				return err
-			}
-			n, err := result.RowsAffected()
-			if err != nil {
-				return err
-			}
-			if n != 0 {
-				cookie = value
-				return nil
-			}
-		}
-	})
-	return cookie, err
-}
 
 func normalizeUsername(username string) string {
 	b := []byte(username)
@@ -212,7 +149,7 @@ func passwordHash(password string, salt []byte) []byte {
 
 func (s *Store) SetCredentials(ctx context.Context, id int64, username, password string) error {
 	username = normalizeUsername(username)
-	if !validUsername(username) || username == "admin" || !validPassword(password) {
+	if !validUsername(username) || !validPassword(password) {
 		return ErrConflict
 	}
 	salt := make([]byte, 16)
@@ -222,7 +159,7 @@ func (s *Store) SetCredentials(ctx context.Context, id int64, username, password
 	hash := passwordHash(password, salt)
 	return s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
 		var revoked sql.NullInt64
-		err := tx.QueryRowContext(ctx, "SELECT revoked_at FROM participants WHERE id=?", id).Scan(&revoked)
+		err := tx.QueryRowContext(ctx, "SELECT revoked_at FROM participants WHERE id=? AND is_synthetic=0", id).Scan(&revoked)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -250,7 +187,7 @@ func (s *Store) SetCredentials(ctx context.Context, id int64, username, password
 func (s *Store) Register(ctx context.Context, label, username, password string) error {
 	label = strings.TrimSpace(label)
 	username = normalizeUsername(username)
-	if !ValidLabel(label) || !validUsername(username) || username == "admin" || !validPassword(password) {
+	if !ValidLabel(label) || !validUsername(username) || !validPassword(password) {
 		return ErrConflict
 	}
 	salt := make([]byte, 16)
@@ -270,6 +207,10 @@ func (s *Store) Register(ctx context.Context, label, username, password string) 
 		if taken {
 			return ErrConflict
 		}
+		var first bool
+		if err := tx.QueryRowContext(ctx, "SELECT NOT EXISTS(SELECT 1 FROM participants WHERE is_synthetic=0 AND (username IS NOT NULL OR is_admin=1))").Scan(&first); err != nil {
+			return err
+		}
 		for {
 			var friend [8]byte
 			if _, err := rand.Read(friend[:]); err != nil {
@@ -277,10 +218,10 @@ func (s *Store) Register(ctx context.Context, label, username, password string) 
 			}
 			_, token := makeSecret()
 			approved := 1
-			if mode == "approval" {
+			if mode == "approval" && !first {
 				approved = 0
 			}
-			result, err := tx.ExecContext(ctx, `INSERT INTO participants(label,token_hash,friend_code,created_at,username,password_salt,password_hash,approved) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`, label, token, hex.EncodeToString(friend[:]), now, username, salt, hash, approved)
+			result, err := tx.ExecContext(ctx, `INSERT INTO participants(label,token_hash,friend_code,created_at,username,password_salt,password_hash,approved,is_admin) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`, label, token, hex.EncodeToString(friend[:]), now, username, salt, hash, approved, first)
 			if err != nil {
 				return err
 			}
@@ -298,9 +239,6 @@ func (s *Store) Register(ctx context.Context, label, username, password string) 
 func createSession(ctx context.Context, tx *sql.Tx, id int64, oldCookie string, now int64) (string, error) {
 	if old, ok := secretHash(oldCookie); ok {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", old); err != nil {
-			return "", err
-		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", old); err != nil {
 			return "", err
 		}
 	}
@@ -359,9 +297,6 @@ func (s *Store) LoginPassword(ctx context.Context, username, password, oldCookie
 func (s *Store) Approved(ctx context.Context, p Principal) (bool, error) {
 	var approved bool
 	query := `SELECT approved FROM participants p WHERE id=? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM web_sessions WHERE participant_id=p.id AND session_hash=? AND expires_at>?)`
-	if p.IsAdmin {
-		query = `SELECT approved FROM participants p WHERE id=? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM admin_sessions s JOIN administrator_account a ON a.participant_id=p.id WHERE s.session_hash=? AND s.expires_at>?)`
-	}
 	err := s.db.QueryRowContext(ctx, query, p.ID, p.session, s.now().Unix()).Scan(&approved)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrUnauthorized

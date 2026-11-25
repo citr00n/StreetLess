@@ -20,6 +20,7 @@ type AdminParticipant struct {
 	ID                    int64
 	Label                 string
 	Active, PublicEnabled bool
+	Registered, Approved, IsAdmin bool
 	CreatedAt             time.Time
 	LastSync              *time.Time
 }
@@ -58,7 +59,7 @@ func scanAdminParticipant(r *sql.Rows) (AdminParticipant, error) {
 	var p AdminParticipant
 	var created int64
 	var last sql.NullInt64
-	err := r.Scan(&p.ID, &p.Label, &p.Active, &p.PublicEnabled, &created, &last)
+	err := r.Scan(&p.ID, &p.Label, &p.Active, &p.PublicEnabled, &p.Registered, &p.Approved, &p.IsAdmin, &created, &last)
 	p.CreatedAt = time.Unix(created, 0).UTC()
 	if last.Valid {
 		t := time.Unix(last.Int64, 0).UTC()
@@ -93,7 +94,7 @@ func (s *Store) Admin(ctx context.Context, participantsBefore, roomsBefore, queu
 			Scan(&view.Active, &view.Recent, &view.RoomCount, &view.Public, &view.Friend, &view.Room, &view.Test); err != nil {
 			return err
 		}
-		const participantFields = "SELECT id,label,revoked_at IS NULL,public_enabled,created_at,last_sync_at FROM participants "
+		const participantFields = "SELECT id,label,revoked_at IS NULL,public_enabled,username IS NOT NULL AND is_synthetic=0,approved,is_admin,created_at,last_sync_at FROM participants "
 		players, err := collect(ctx, tx, scanAdminParticipant, participantFields+"WHERE id<? ORDER BY id DESC LIMIT 51", cursor(participantsBefore))
 		if err != nil {
 			return err
@@ -137,4 +138,44 @@ func (s *Store) Admin(ctx context.Context, participantsBefore, roomsBefore, queu
 		return nil
 	})
 	return view, err
+}
+
+// GrantAdmin grants a registered active approved account the administrator role.
+func (s *Store) GrantAdmin(ctx context.Context, id int64) error {
+	return s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
+		return grantAdmin(ctx, tx, "id=?", id)
+	})
+}
+
+// BootstrapAdmin is an offline recovery operation for a database on which no
+// administrator role has ever been assigned.
+func (s *Store) BootstrapAdmin(ctx context.Context, username string) error {
+	username = normalizeUsername(username)
+	return s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
+		var assigned bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM participants WHERE is_admin=1)").Scan(&assigned); err != nil {
+			return err
+		}
+		if assigned {
+			return ErrConflict
+		}
+		return grantAdmin(ctx, tx, "username=?", username)
+	})
+}
+
+func grantAdmin(ctx context.Context, tx *sql.Tx, condition string, value any) error {
+	var id int64
+	var approved, registered bool
+	err := tx.QueryRowContext(ctx, "SELECT id,approved,username IS NOT NULL AND is_synthetic=0 FROM participants WHERE "+condition+" AND revoked_at IS NULL", value).Scan(&id, &approved, &registered)
+	if err == sql.ErrNoRows {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !approved || !registered {
+		return ErrConflict
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE participants SET is_admin=1 WHERE id=?", id)
+	return err
 }
