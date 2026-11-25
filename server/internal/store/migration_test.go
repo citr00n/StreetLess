@@ -70,6 +70,15 @@ func TestLegacyAdminUsernameKeepsSeparateParticipant(t *testing.T) {
 	if err != nil || !admin.IsAdmin || admin.ID == legacy.ID || admin.ID == 0 {
 		t.Fatalf("admin account was not isolated: %+v, %v", admin, err)
 	}
+	if approved, err := s.Approved(t.Context(), admin); err != nil || !approved {
+		t.Fatalf("admin session cannot access approved participant: %v, %v", approved, err)
+	}
+	if err := s.Logout(t.Context(), adminCookie); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approved(t.Context(), admin); err != ErrUnauthorized {
+		t.Fatalf("logged-out admin session remained authorized: %v", err)
+	}
 	if err := s.Revoke(t.Context(), admin.ID); err != ErrConflict {
 		t.Fatalf("admin participant could be revoked: %v", err)
 	}

@@ -313,7 +313,11 @@ func (s *Store) LoginPassword(ctx context.Context, username, password, oldCookie
 
 func (s *Store) Approved(ctx context.Context, p Principal) (bool, error) {
 	var approved bool
-	err := s.db.QueryRowContext(ctx, `SELECT approved FROM participants p WHERE id=? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM web_sessions WHERE participant_id=p.id AND session_hash=? AND expires_at>?)`, p.ID, p.session, s.now().Unix()).Scan(&approved)
+	query := `SELECT approved FROM participants p WHERE id=? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM web_sessions WHERE participant_id=p.id AND session_hash=? AND expires_at>?)`
+	if p.IsAdmin {
+		query = `SELECT approved FROM participants p WHERE id=? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM admin_sessions s JOIN administrator_account a ON a.participant_id=p.id WHERE s.session_hash=? AND s.expires_at>?)`
+	}
+	err := s.db.QueryRowContext(ctx, query, p.ID, p.session, s.now().Unix()).Scan(&approved)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrUnauthorized
 	}
