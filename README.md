@@ -30,16 +30,16 @@ The relay is independent of Pretendo; Pretendo integration is not implemented. I
 
 1. Download `streetless.3dsx` or `streetless.cia` from a project release or CI artifact. Copy the `.3dsx` to `SD:/3ds/streetless/streetless.3dsx`, or install the CIA with your CIA installer. The CIA requires CFW with signature patches.
 2. Register on your relay's website. If the relay requires approval, wait for an administrator to approve your account.
-3. In your account, generate a pairing code. In Streetless, choose **Pair console**, then scan the QR code or enter the relay hostname, IPv4 address, port and code.
+3. In your account, generate a pairing code. In Streetless, open **Settings → Pair console**, then scan the QR code or enter the relay hostname, IPv4 address, port and code.
 4. Select **Sync** to exchange passes. Pairing codes expire after ten minutes; do not share them. Pairing a new console replaces the previous console credential.
 
-If the relay accepts pairing but the SD configuration cannot be saved, keep `pair.pending` and retry **Pair console** in the same mode. The client can finish a previously flushed matching configuration without contacting the relay, even after the code expires. If it still fails, report the displayed SD operation and error code; never share `pair.pending`, `config.txt` or `config.txt.tmp`, as they contain credentials.
+If the relay accepts pairing but the SD configuration cannot be saved, keep `pair.pending` and retry **Settings → Pair console** in the same mode. The client can finish a previously flushed matching configuration without contacting the relay, even after the code expires. If it still fails, report the displayed SD operation and error code; never share `pair.pending`, `config.txt` or `config.txt.tmp`, as they contain credentials.
 
 Releases include `streetless-cia-qr.png`, which points to the release's CIA download for an installer such as FBI. The release must be publicly accessible to the console.
 
 ### Choose outgoing games
 
-Open **Outgoing games** in the client. Select a title with the D-pad, toggle it with **A**, save with **X**, or cancel with **B**. The client shows the game name when it can read local title metadata; otherwise it shows the exact CEC ID.
+Open **Settings → Outgoing games** in the client. Select a title with the D-pad, toggle it with **A**, save with **X**, or cancel with **B**. The client shows the game name when it can read local title metadata; otherwise it shows the exact CEC ID.
 
 Before the first save, all eligible games are enabled. After saving, newly discovered games are disabled until selected. This setting filters outgoing slots, not incoming metadata; however, games requiring a two-way exchange may not receive without an outgoing slot. Already staged or queued deliveries cannot be recalled by a local selection change. Sync again to replace the relay's prior outbox snapshot.
 
