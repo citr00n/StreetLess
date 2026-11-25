@@ -5,6 +5,7 @@
 #include <string.h>
 #include "config.h"
 #include "http.h"
+#include "menu_ui.h"
 #include "pair.h"
 #include "social.h"
 #include "selection.h"
@@ -181,28 +182,75 @@ static void background_menu(bool debug, bool valid, bool sync_disabled) {
     }
 }
 
+typedef enum {
+    HOME_SYNC,
+    HOME_FRIENDS,
+    HOME_ROOMS,
+    HOME_OUTGOING,
+    HOME_BACKGROUND,
+    HOME_SETTINGS,
+    HOME_ACCOUNT
+} HomeItem;
+
+typedef enum {
+    SETTINGS_PRIVACY,
+    SETTINGS_GAMES,
+    SETTINGS_DEBUG,
+    SETTINGS_EXPORT
+} SettingsItem;
+
+typedef enum {
+    ACCOUNT_QR,
+    ACCOUNT_CODE
+} AccountItem;
+
 static void run_menu(Config *config, bool valid) {
-    static const char *const items[] = {"Sync", "Privacy", "Friends", "Rooms", "Outgoing", "Outgoing games", "Pair console", "Debug mode", "Background sync", "Export local slot"};
-    static const SocialPage pages[] = {SOCIAL_PRIVACY, SOCIAL_FRIENDS, SOCIAL_ROOMS, SOCIAL_OUTGOING};
+    static const char *const home_items[] = {
+        "Sync", "Friends", "Rooms", "Outgoing", "Background sync", "Settings", "Account"
+    };
+    static const char *const settings_items[] = {
+        "Privacy", "Outgoing games", "Debug mode", "Export local slot"
+    };
+    static const char *const account_items[] = {
+        "Scan QR code", "Enter pairing code"
+    };
     Http http;
     char pin[5] = "";
     bool debug = false;
     bool connected = valid && http_open(&http, config, "romfs:/certs.pem", NULL);
-    unsigned selected = valid ? 0 : 6;
+    unsigned home_selected = valid ? HOME_SYNC : HOME_ACCOUNT;
+    unsigned settings_selected = SETTINGS_PRIVACY;
+    unsigned account_selected = ACCOUNT_QR;
+    bool in_settings = false, in_account = !valid;
     bool consented = false, sync_disabled = false;
     while (ui_running()) {
-        unsigned count = debug ? 10 : 9;
-        consoleClear();
-        printf("Streetless\n\n%s\n\n", debug ? "DEBUG: plaintext HTTP" : "Production: verified HTTPS");
-        for (unsigned i = 0; i < count; ++i)
-            printf("%s %s%s\n", selected == i ? ">" : " ", items[i],
-                   i == 0 && sync_disabled ? " (restart console)" : "");
-        puts("\nD-pad Select   A Open   START Exit");
-        uint32_t keys = ui_keys();
-        if (keys & KEY_UP) selected = (selected + count - 1) % count;
-        else if (keys & KEY_DOWN) selected = (selected + 1) % count;
-        else if (keys & KEY_A) {
-            if (selected == 7) {
+        const char *status = debug ? "DEBUG: plaintext HTTP" : "Production: verified HTTPS";
+        if (sync_disabled)
+            status = debug ? "DEBUG: restart console before sync" : "Restart console before sync";
+        if (in_account) {
+            if (!menu_ui_choose("Account", status, account_items,
+                                sizeof(account_items) / sizeof(account_items[0]),
+                                &account_selected, true)) {
+                in_account = false;
+                continue;
+            }
+            if (!stop_background_for_action()) continue;
+            if (connected) { http_close(&http); connected = false; }
+            PairMethod method = account_selected == ACCOUNT_QR ? PAIR_QR : PAIR_CODE;
+            if (pair_run(config, debug ? pin : NULL, method)) valid = true;
+            if (valid) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
+            continue;
+        }
+        if (in_settings) {
+            size_t count = debug ? SETTINGS_EXPORT + 1 : SETTINGS_DEBUG + 1;
+            if (settings_selected >= count) settings_selected = SETTINGS_DEBUG;
+            if (!menu_ui_choose("Settings", status, settings_items, count,
+                                &settings_selected, true)) {
+                in_settings = false;
+                continue;
+            }
+            switch ((SettingsItem)settings_selected) {
+            case SETTINGS_DEBUG:
                 if (debug) {
                     consoleClear();
                     puts("Debug mode\n\nA Re-enter server PIN\nX Return to production HTTPS\nB Cancel");
@@ -218,26 +266,48 @@ static void run_menu(Config *config, bool valid) {
                 }
                 if (connected) { http_close(&http); connected = false; }
                 if (valid) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
-            } else if (selected == 8) {
-                background_menu(debug, valid, sync_disabled);
-            } else if (selected == 9) {
+                break;
+            case SETTINGS_EXPORT:
                 if (sync_disabled) ui_message("Restart the console before using CECD again.");
                 else if (stop_background_for_action() && !export_run()) sync_disabled = true;
-            } else if (selected == 5) {
+                break;
+            case SETTINGS_GAMES:
                 if (sync_disabled) ui_message("Restart the console before using CECD again.");
                 else if (stop_background_for_action() && !selection_menu()) sync_disabled = true;
-            } else if (selected == 6) {
-                if (!stop_background_for_action()) continue;
-                if (connected) { http_close(&http); connected = false; }
-                if (pair_run(config, debug ? pin : NULL)) valid = true;
-                if (valid) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
-            } else if (!valid) {
-                ui_message("Pair this console first, or install an existing\nconfig.txt in /3ds/streetless/.");
-            } else if (!connected) {
-                connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
-                if (!connected) ui_message("Cannot initialize Streetless networking.");
-            } else if (selected) {
-                social_open(&http, pages[selected - 1]);
+                break;
+            case SETTINGS_PRIVACY:
+                if (!valid) {
+                    ui_message("Pair this console first, or install an existing\nconfig.txt in /3ds/streetless/.");
+                } else {
+                    if (!connected) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
+                    if (!connected) ui_message("Cannot initialize Streetless networking.");
+                    else social_open(&http, SOCIAL_PRIVACY);
+                }
+                break;
+            }
+            continue;
+        }
+        if (!menu_ui_choose("Streetless", status, home_items,
+                            sizeof(home_items) / sizeof(home_items[0]),
+                            &home_selected, false)) continue;
+        if (home_selected == HOME_SETTINGS) {
+            in_settings = true;
+        } else if (home_selected == HOME_ACCOUNT) {
+            in_account = true;
+        } else if (home_selected == HOME_BACKGROUND) {
+            background_menu(debug, valid, sync_disabled);
+        } else if (!valid) {
+            ui_message("Pair this console first, or install an existing\nconfig.txt in /3ds/streetless/.");
+        } else {
+            if (!connected) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
+            if (!connected) {
+                ui_message("Cannot initialize Streetless networking.");
+            } else if (home_selected == HOME_FRIENDS) {
+                social_open(&http, SOCIAL_FRIENDS);
+            } else if (home_selected == HOME_ROOMS) {
+                social_open(&http, SOCIAL_ROOMS);
+            } else if (home_selected == HOME_OUTGOING) {
+                social_open(&http, SOCIAL_OUTGOING);
             } else if (sync_disabled) {
                 ui_message("CECD could not return to normal operation.\nRestart the console before syncing again.");
             } else if (consented || ui_confirm("Sync", NULL,

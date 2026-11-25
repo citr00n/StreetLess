@@ -205,7 +205,7 @@ static bool generate_token(char token[65]) {
     return true;
 }
 
-bool pair_run(Config *config, const char *debug_pin) {
+bool pair_run(Config *config, const char *debug_pin, PairMethod method) {
     PairData data;
     bool pending_debug = false;
     int pending = load_pending(&data, &pending_debug);
@@ -241,12 +241,7 @@ bool pair_run(Config *config, const char *debug_pin) {
         }
         if (recovered > 0) return finish_pairing(config, &data);
     } else {
-        consoleClear();
-        puts("Streetless / Pair console\n\nA Scan QR\nY Enter one-time code\nB Cancel   START Exit");
-        uint32_t keys;
-        do { keys = ui_keys(); } while (keys && !(keys & (KEY_A | KEY_Y | KEY_B)));
-        if (!keys || (keys & KEY_B)) return false;
-        if (!((keys & KEY_A) ? scan(&data) : manual(&data, debug_pin != NULL))) return false;
+        if (!(method == PAIR_QR ? scan(&data) : manual(&data, debug_pin != NULL))) return false;
         char target[290];
         snprintf(target, sizeof(target), "%s:%u\nIPv4: %s", data.config.host,
             (unsigned)data.config.port, data.config.ipv4);

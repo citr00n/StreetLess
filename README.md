@@ -30,12 +30,14 @@ The relay is independent of Pretendo; Pretendo integration is not implemented. I
 
 1. Download `streetless.3dsx` or `streetless.cia` from a project release or CI artifact. Copy the `.3dsx` to `SD:/3ds/streetless/streetless.3dsx`, or install the CIA with your CIA installer. The CIA requires CFW with signature patches.
 2. Register on your relay's website. If the relay requires approval, wait for an administrator to approve your account.
-3. In your account, generate a pairing code. In Streetless, open **Settings → Pair console**, then scan the QR code or enter the relay hostname, IPv4 address, port and code.
+3. In your account, generate a pairing code. On the 3DS, open **Account** and choose **Scan QR code** or **Enter pairing code**. For manual pairing, enter the relay hostname, IPv4 address, port and code.
 4. Select **Sync** to exchange passes. Pairing codes expire after ten minutes; do not share them. Pairing a new console replaces the previous console credential.
 
-If the relay accepts pairing but the SD configuration cannot be saved, keep `pair.pending` and retry **Settings → Pair console** in the same mode. The client can finish a previously flushed matching configuration without contacting the relay, even after the code expires. If it still fails, report the displayed SD operation and error code; never share `pair.pending`, `config.txt` or `config.txt.tmp`, as they contain credentials.
+If the relay accepts pairing but the SD configuration cannot be saved, keep `pair.pending` and retry from **Account** in the same mode. The client can finish a previously flushed matching configuration without contacting the relay, even after the code expires. If it still fails, report the displayed SD operation and error code; never share `pair.pending`, `config.txt` or `config.txt.tmp`, as they contain credentials.
 
 Releases include `streetless-cia-qr.png`, which points to the release's CIA download for an installer such as FBI. The release must be publicly accessible to the console.
+
+The graphical home screen groups account pairing under **Account** and local preferences under **Settings**. Use the D-pad to navigate, **A** to open, **B** to go back and **START** to exit. Social pages and sync progress use the text interface.
 
 ### Choose outgoing games
 
@@ -166,7 +168,7 @@ cc -std=c11 -Wall -Wextra -Werror -Ibackground/tests/stubs background/source/hea
 /tmp/streetless-bg-heap-test
 ```
 
-GitHub Actions runs the Go and host tests, a Docker Compose HTTPS smoke test, and builds the client formats and background module for pull requests, pushes to `main`, and merge queues. Successful CI runs provide the client and background artifacts. Passing CI is not a substitute for testing StreetPass, QR scanning, sleep/wake, and recovery on real hardware.
+GitHub Actions runs the Go and host tests, a Docker Compose HTTPS smoke test, and builds the client formats and background module for pull requests ready for review, pushes to `main`, and merge queues. Draft pull requests skip the jobs; marking one ready starts CI. Successful CI runs provide the client and background artifacts. Passing CI is not a substitute for testing StreetPass, QR scanning, sleep/wake, and recovery on real hardware.
 
 ### Debugging
 
@@ -187,9 +189,9 @@ env -u STREETLESS_TRANSPORT \
 
 Open `http://localhost:8080/` on that machine and register a disposable account; the first registered account becomes administrator. Sign in normally to use `/admin`. `--debug` is an alternative to `STREETLESS_DEBUG=1`. The server prints a fresh four-digit PIN on each start. To use a real 3DS, configure a hostname and reachable LAN IPv4 for the isolated test relay.
 
-On the 3DS, select **Debug mode**, accept the warning, enter the PIN and pair with the debug relay. Select **Debug mode** again and press **A** to enter a new PIN, or **X** to return to production HTTPS. The PIN is memory-only and debug mode resets on exit. A debug client probes the server before sending credentials or game data; production clients do not fall back to HTTP.
+On the 3DS, select **Settings → Debug mode**, accept the warning, enter the PIN and pair with the debug relay from **Account**. Select **Settings → Debug mode** again and press **A** to enter a new PIN, or **X** to return to production HTTPS. The PIN is memory-only and debug mode resets on exit. A debug client probes the server before sending credentials or game data; production clients do not fall back to HTTP.
 
-In debug mode, **Export local slot** saves an original native slot to `SD:/3ds/streetless/test-XXXXXXXX.slot`. The administrator can upload it for any active participant without a separate opt-in. Test deliveries expire after 24 hours, do not consume public-lobby quota, and use normal ACK/reject handling. Export and share native data only with its owner's consent. The background module does not use debug HTTP.
+In debug mode, **Settings → Export local slot** saves an original native slot to `SD:/3ds/streetless/test-XXXXXXXX.slot`. The administrator can upload it for any active participant without a separate opt-in. Test deliveries expire after 24 hours, do not consume public-lobby quota, and use normal ACK/reject handling. Export and share native data only with its owner's consent. The background module does not use debug HTTP.
 
 ## Privacy and security
 
