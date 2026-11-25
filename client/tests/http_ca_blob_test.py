@@ -39,18 +39,24 @@ def main():
 
         def serve():
             try:
-                for _ in range(2):
+                for trusted_connection in (True, False):
                     conn, _ = listener.accept()
-                    conn.settimeout(10)
-                    try:
-                        with context.wrap_socket(conn, server_side=True) as tls:
-                            request = tls.recv(4096)
-                            if not request.startswith(b"GET /healthz HTTP/1.1\r\n"):
-                                raise AssertionError("unexpected HTTP request")
-                            tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n")
-                    except ssl.SSLError:
-                        # The untrusted-CA scenario aborts during TLS handshake.
-                        pass
+                    with conn:
+                        conn.settimeout(10)
+                        try:
+                            with context.wrap_socket(conn, server_side=True) as tls:
+                                request = tls.recv(4096)
+                                if not trusted_connection:
+                                    if request:
+                                        raise AssertionError("untrusted client sent HTTP data")
+                                    continue
+                                if not request.startswith(b"GET /healthz HTTP/1.1\r\n"):
+                                    raise AssertionError("unexpected HTTP request")
+                                tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n")
+                        except (ssl.SSLError, BrokenPipeError, ConnectionResetError):
+                            if trusted_connection:
+                                raise
+                            # Client rejection can surface as a TLS alert or TCP disconnect.
             except Exception as exc:
                 errors.append(exc)
             finally:
