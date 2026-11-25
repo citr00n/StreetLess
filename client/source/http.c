@@ -81,6 +81,35 @@ close_soc:
     return false;
 }
 
+bool http_cancelled(const Http *h) {
+    return h->cancel && h->cancel(h->cancel_data);
+}
+
+static int progress(void *data, curl_off_t total_down, curl_off_t now_down,
+    curl_off_t total_up, curl_off_t now_up) {
+    (void)total_down; (void)now_down; (void)total_up; (void)now_up;
+    return http_cancelled(data) ? 1 : 0;
+}
+
+bool http_set_cancel(Http *h, bool (*callback)(void *), void *data) {
+    h->cancel = callback;
+    h->cancel_data = data;
+    if (curl_easy_setopt(h->easy, CURLOPT_XFERINFOFUNCTION, progress) != CURLE_OK ||
+        curl_easy_setopt(h->easy, CURLOPT_XFERINFODATA, h) != CURLE_OK ||
+        curl_easy_setopt(h->easy, CURLOPT_NOPROGRESS, callback ? 0L : 1L) != CURLE_OK) {
+        h->cancel = NULL;
+        h->cancel_data = NULL;
+        return false;
+    }
+    return true;
+}
+bool http_set_ca_blob(Http *h, const void *pem, size_t size) {
+    if (!h || !h->easy || !pem || !size) return false;
+    struct curl_blob blob = { .data = (void *)pem, .len = size, .flags = CURL_BLOB_NOCOPY };
+    return curl_easy_setopt(h->easy, CURLOPT_CAINFO_BLOB, &blob) == CURLE_OK;
+}
+
+
 void http_close(Http *h) {
     curl_easy_cleanup(h->easy);
     curl_slist_free_all(h->resolve);
@@ -98,6 +127,7 @@ static CURLcode request(Http *h, const char *path, const char *mime,
     const void *body, size_t len, void *response, size_t cap, size_t *received, long *status, bool authenticated) {
     *received = 0;
     *status = 0;
+    if (http_cancelled(h)) return CURLE_ABORTED_BY_CALLBACK;
     char url[320];
     int n = snprintf(url, sizeof(url), "%s%s", h->origin, path);
     if (n < 0 || (size_t)n >= sizeof(url)) return CURLE_URL_MALFORMAT;

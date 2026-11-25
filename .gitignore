@@ -4,6 +4,8 @@
 /client/streetless.elf
 /client/streetless.smdh
 /client/streetless.cia
+/background/build/
+/background/0004013000F5A302.cxi
 /server/streetlessd
 *.sqlite
 *.sqlite-shm

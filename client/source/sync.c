@@ -37,7 +37,7 @@ static bool mailbox_title(const uint8_t name[MBOX_NAME_SIZE], uint32_t *out) {
 static uint32_t spare(uint32_t max, uint32_t used) { return max > used ? max - used : 0; }
 
 static Result load_mailboxes(Handle service, Mailbox boxes[MBOX_LIMIT], size_t *used,
-    const char **phase) {
+    const char **phase, const Http *http) {
     uint8_t list[MBOX_LIST_HEADER + MBOX_LIMIT * MBOX_NAME_SIZE];
     uint32_t titles[MBOX_LIMIT];
     u32 bytes;
@@ -52,6 +52,7 @@ static Result load_mailboxes(Handle service, Mailbox boxes[MBOX_LIMIT], size_t *
         for (uint32_t j = 0; j < i; ++j) if (titles[j] == titles[i]) return -1;
     }
     for (uint32_t i = 0; i < count; ++i) {
+        if (http_cancelled(http)) return -1;
         uint8_t mbox[MBOX_INFO_PREFIX];
         *phase = "reading CECD mailbox info";
         rc = cecd_read(service, titles[i], CEC_PATH_MBOX_INFO, mbox, sizeof(mbox), &bytes);
@@ -125,18 +126,19 @@ static void reject_slots(Http *http, const SLReject *items, size_t count) {
 }
 
 int sync_run(Http *http, const Config *config) {
+    if (http_cancelled(http)) return -2;
     Selection selection;
     if (!selection_load(&selection)) {
         puts("Outgoing preferences are invalid or unavailable.");
         puts("No passes sent; repair outgoing.bin on SD.");
-        return 0;
+        return -2;
     }
     Handle service;
     Result rc = cecd_open(&service);
     if (R_FAILED(rc)) {
         report_ipc("cannot access cecd:s", rc);
         puts("Use Luma3DS and current system software.");
-        return 0;
+        return -2;
     }
     CecExchange session = {0};
     CecSlot metadata[SL_TITLES];
@@ -155,12 +157,13 @@ int sync_run(Http *http, const Config *config) {
     bool committed = false;
     const char *phase;
 
-#define IPC(label, call) do { phase = (label); rc = (call); if (R_FAILED(rc)) goto ipc_fail; } while (0)
-    if (!journal_recover(service, http, config)) goto cleanup;
+#define IPC(label, call) do { if (http_cancelled(http)) goto cleanup; phase = (label); rc = (call); if (R_FAILED(rc)) goto ipc_fail; } while (0)
+    if (http_cancelled(http) || !journal_recover(service, http, config)) goto cleanup;
     puts("Reading local StreetPass mailboxes...");
-    rc = load_mailboxes(service, boxes, &box_count, &phase);
-    if (R_FAILED(rc)) goto ipc_fail;
+    rc = load_mailboxes(service, boxes, &box_count, &phase, http);
+    if (R_FAILED(rc)) { if (http_cancelled(http)) goto cleanup; goto ipc_fail; }
     puts("Opening CECD exchange...");
+    if (http_cancelled(http)) goto cleanup;
     rc = cecd_begin(service, &session, metadata, &native_count, &phase);
     if (R_FAILED(rc)) goto ipc_fail;
 
@@ -303,16 +306,16 @@ cleanup:;
         report_ipc("could not restore normal StreetPass", restored);
         puts("Restart the console before another Sync.");
     }
-    if (reject_count) reject_slots(http, rejects, reject_count);
+    if (reject_count && !http_cancelled(http)) reject_slots(http, rejects, reject_count);
     if (committed) {
         printf("Received %u game slot(s).\n", (unsigned)applied_count);
         if (!applied_count) puts("Wait for other players or make inbox space.");
-        else if (R_SUCCEEDED(restored)) {
+        else if (R_SUCCEEDED(restored) && !http_cancelled(http)) {
             uint64_t ids[SL_TITLES];
             for (size_t i = 0; i < applied_count; ++i) ids[i] = applied[i]->id;
             journal_ack(http, ids, applied_count);
         } else puts("Passes are saved locally; ACK deferred.");
     }
     free(response);
-    return R_FAILED(restored) ? -1 : committed ? (int)applied_count : 0;
+    return R_FAILED(restored) || R_FAILED(rollback) ? -1 : committed ? (int)applied_count : -2;
 }

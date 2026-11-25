@@ -42,12 +42,18 @@ jobs:
           /tmp/streetless-selection-test
           cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -DSTREETLESS_SELECTION_HOST_TEST -DSTREETLESS_SELECTION_STORAGE_TEST -Iclient/include client/source/selection.c client/tests/selection_storage_test.c -o /tmp/streetless-selection-storage-test
           /tmp/streetless-selection-storage-test
+      - name: Test background lifecycle
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Ibackground/include background/source/lifecycle.c background/tests/lifecycle_test.c -o /tmp/streetless-bg-test
+          /tmp/streetless-bg-test
       - name: Test client debug transport
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
           cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_debug_test.c -lcurl -o /tmp/streetless-http-test
           /tmp/streetless-http-test
+          cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_ca_blob_test.c -lcurl -o /tmp/streetless-ca-test
+          python3 client/tests/http_ca_blob_test.py /tmp/streetless-ca-test
       - name: Test Compose HTTPS deployment
         shell: bash
         run: |
@@ -101,11 +107,11 @@ jobs:
           git -C "$RUNNER_TEMP/bannertool" -c url.https://github.com/.insteadOf=git://github.com/ submodule update --init --recursive
           make -C "$RUNNER_TEMP/bannertool"
           cp "$RUNNER_TEMP/bannertool/output/linux-x86_64/bannertool" "$RUNNER_TEMP/streetless-tools/"
-      - name: Build 3DS client
+      - name: Build 3DS client and background module
         run: |
           docker run --rm -v "$PWD:/work" -v "$RUNNER_TEMP/streetless-tools:/streetless-tools:ro" -w /work \
             devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5 \
-            sh -lc 'set -e; dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson python; export PATH="/streetless-tools:$PATH"; make -C client; test -s client/streetless.3dsx; test -s client/streetless.cia'
+            sh -lc 'set -e; dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson python; export PATH="/streetless-tools:$PATH"; make -C client; make -C background; test -s client/streetless.3dsx; test -s client/streetless.cia; test -s background/0004013000F5A302.cxi'
       - name: Upload 3DS client artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -113,6 +119,12 @@ jobs:
           path: |
             client/streetless.3dsx
             client/streetless.cia
+          if-no-files-found: error
+      - name: Upload background module
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: streetless-background
+          path: background/0004013000F5A302.cxi
           if-no-files-found: error
 
   release-version:
@@ -144,6 +156,10 @@ jobs:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: streetless-3ds
+          path: release
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: streetless-background
           path: release
       - name: Build container image
         shell: bash
@@ -177,5 +193,5 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
             args+=(--prerelease)
           fi
-          gh release create "$GITHUB_REF_NAME" release/streetless.3dsx release/streetless.cia release/streetless-cia-qr.png \
+          gh release create "$GITHUB_REF_NAME" release/streetless.3dsx release/streetless.cia release/0004013000F5A302.cxi release/streetless-cia-qr.png \
             --verify-tag --title "$GITHUB_REF_NAME" --generate-notes "${args[@]}"

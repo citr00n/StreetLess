@@ -89,10 +89,40 @@ static void scenario(const char *reply, bool pair, bool succeeds) {
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
+static bool cancelled(void *data) {
+    return *(bool *)data;
+}
+
+static void cancel_before_request(void) {
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    assert(listener >= 0);
+    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    assert(bind(listener, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    assert(listen(listener, 1) == 0);
+    socklen_t len = sizeof(addr);
+    assert(getsockname(listener, (struct sockaddr *)&addr, &len) == 0);
+    Config c = {.host = "localhost", .ipv4 = "127.0.0.1", .token = "secret", .port = ntohs(addr.sin_port)};
+    Http h;
+    assert(http_open(&h, &c, NULL, "0123"));
+    bool stop = true;
+    assert(http_set_cancel(&h, cancelled, &stop));
+    char response[64];
+    size_t received = 123;
+    long status = 123;
+    assert(http_request(&h, "/v1/social", NULL, NULL, 0, response, sizeof(response),
+                        &received, &status) == CURLE_ABORTED_BY_CALLBACK);
+    assert(received == 0 && status == 0);
+    struct pollfd ready = {listener, POLLIN, 0};
+    assert(poll(&ready, 1, 0) == 0);
+    http_close(&h);
+    close(listener);
+}
+
 int main(void) {
     assert(http_debug_pin_valid("0000") && http_debug_pin_valid("1234"));
     assert(!http_debug_pin_valid(NULL) && !http_debug_pin_valid("123") &&
            !http_debug_pin_valid("12345") && !http_debug_pin_valid("12a4"));
+    cancel_before_request();
     scenario("wrong", false, false);
     scenario("streetless-debug-v1\nextra", true, false);
     scenario("streetless-debug-v1\n", false, true);

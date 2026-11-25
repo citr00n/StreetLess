@@ -212,6 +212,7 @@ static void run_menu(Config *config, bool valid) {
                     else if (k & KEY_A) { if (!enter_debug_pin(pin)) continue; }
                     else continue;
                 } else {
+                    if (!stop_background_for_action()) continue;
                     if (!enter_debug_pin(pin)) continue;
                     debug = true;
                 }

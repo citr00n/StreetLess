@@ -11,7 +11,7 @@ In normal mode the client exchanges native game data over HTTPS/TCP, with an exp
 1. Open your relay's website and register an account. On a relay configured to require approval, wait for an administrator to approve it.
 2. Install `streetless.3dsx` in `/3ds/streetless/` on the SD card and launch it with Homebrew Launcher, or install `streetless.cia` with a CIA installer on a suitably configured homebrew console.
 3. In your account, generate a one-time pairing code. On your 3DS, scan its QR code or enter the relay address, IPv4 address and pairing code. Codes expire after ten minutes. Never share a code with anyone you do not want to connect to your account. StreetPass must already be enabled in a supported game, such as Mii Plaza; select **Sync** to exchange game data.
-4. The public lobby is enabled by default and accepts at most five random incoming slots per rolling 24 hours. Switch it off for friends and invited rooms only. An explicit send requested on the site waits for the sender's next 3DS Sync; receiving also requires a Sync on the recipient's console.
+4. The public lobby is enabled by default and accepts at most five random incoming slots per rolling 24 hours. Switch it off for friends and invited rooms only. An explicit send requested on the site waits for the sender's next 3DS sync, whether manual or background; receiving also requires a sync on the recipient's console.
 
 A pairing code is temporary and can be claimed only by one console. Pairing again replaces the previous 3DS credential. In normal mode the client verifies HTTPS certificates and does not fall back to plaintext. A QR image or code is sensitive until it expires: do not post it publicly or send it to an untrusted device.
 
@@ -192,6 +192,19 @@ docker run --rm --platform linux/amd64 -v "$PWD:/work" \
 
 The outputs are `client/streetless.3dsx` and `client/streetless.cia`. The CIA is unsigned homebrew and requires Luma3DS/CFW with signature patches. On systems without compatible packaging tools, use the CI artifacts or build only `.3dsx`. For a test CA, rebuild with `make -C client CA_FILE=/absolute/path/to/root.pem`. A real console needs current system software and Luma3DS; neither emulator fixtures nor a successful build establish hardware compatibility.
 
+## Background sync (experimental)
+
+The optional background module has **not yet been verified on physical 3DS hardware**. It requires Luma3DS 13 or newer and production HTTPS; it does not run in debug HTTP mode. It must be started manually once after each power-on. While the console is awake and networking is available, it attempts a sync immediately and then every 15 minutes, including after Streetless is closed. Sleep-mode networking and delivery are not guaranteed. Automatic sync also sends selected outgoing game slots through your allowed routes.
+
+1. Copy the release asset `0004013000F5A302.cxi` to `SD:/luma/sysmodules/0004013000F5A302.cxi`. Do not overwrite an existing file with that name without checking it first. The CIA QR installs only the foreground app, not the module.
+2. Hold **SELECT** during boot and enable **Enable loading external FIRMs and modules** in Luma's configuration. This adds a new module; it does not replace a built-in module.
+3. Pair Streetless with the production relay and choose your outgoing games. In the client select **Background sync** and confirm the warning. Close Streetless after the service reports it connected. Start the service again after each reboot.
+4. Reopen **Background sync** to check its status or stop it. Manual Sync, pairing, slot export and outgoing-game selection require a confirmed stop first; Streetless prompts for it. An error or uncertain launch blocks those operations rather than risking concurrent CECD access.
+
+If the module cannot be stopped or its status remains uncertain, power the console off completely. If necessary, remove `SD:/luma/sysmodules/0004013000F5A302.cxi` to disable the module. A stale or damaged `SD:/3ds/streetless/background.pending` marker can be removed **only while the console is completely powered off**, after confirming the module is not running. Never remove it to bypass a running or uncertain service.
+
+Build the module with `make -C background`. It embeds the same default CA as the app; when using a custom CA, build **both** client and module with `CA_FILE=/absolute/path/to/root.pem`. The CI artifact `streetless-background` and tagged GitHub Releases include the module separately.
+
 ## Debug mode and test deliveries
 
 **Debug mode is unsafe on an untrusted network.** HTTP exposes account passwords, console tokens, pairing codes, native slots and the debug PIN. A four-digit PIN is not encryption and cannot authenticate a server against an active network attacker. Use a separate test database and disposable accounts on an isolated LAN; never expose the debug listener to the Internet or use production credentials or game data without consent.
@@ -247,7 +260,12 @@ cc -std=c11 -Wall -Wextra -Werror -DSTREETLESS_SELECTION_HOST_TEST -Iclient/incl
 /tmp/streetless-selection-test
 cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -DSTREETLESS_SELECTION_HOST_TEST -DSTREETLESS_SELECTION_STORAGE_TEST -Iclient/include client/source/selection.c client/tests/selection_storage_test.c -o /tmp/streetless-selection-storage-test
 /tmp/streetless-selection-storage-test
+cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_ca_blob_test.c -lcurl -o /tmp/streetless-ca-test
+python3 client/tests/http_ca_blob_test.py /tmp/streetless-ca-test
+cc -std=c11 -Wall -Wextra -Werror -Ibackground/include background/source/lifecycle.c background/tests/lifecycle_test.c -o /tmp/streetless-bg-test
+/tmp/streetless-bg-test
 make -C client
+make -C background
 ```
 
 For a local debug relay, see the debug instructions above. Keep its database, credentials, and native slot exports separate from production and out of version control. Format changed Go code with `gofmt`; run the relevant tests before opening a pull request. Cross-compilation and synthetic fixtures do not substitute for a two-console hardware test.
@@ -256,9 +274,9 @@ For a local debug relay, see the debug instructions above. Keep its database, cr
 
 - `cd server && go test ./...` exercises the server, SQLite routing and proxy behavior.
 - From the repository root: `cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test && /tmp/streetless-wire-test`.
-- GitHub Actions runs the Go tests and vet, the native wire and pairing tests, a Docker Compose HTTPS smoke test, and builds both 3DS client formats on pushes and pull requests. After the tests and build pass, download both files from the workflow run's `streetless-3ds` artifact.
+- GitHub Actions runs the Go tests and vet, native client and lifecycle tests, a Docker Compose HTTPS smoke test, and builds both 3DS client formats plus the background module. After the checks pass, download the `streetless-3ds` and `streetless-background` workflow artifacts.
 - Verify QR scanning, pairing and StreetPass delivery on real 3DS hardware. A successful server test or cross-compilation is not hardware proof.
 
-Version tags such as `v1.2.3` or `v1.2.3-rc.1` publish `streetless.3dsx`, `streetless.cia` and `streetless-cia-qr.png` to a GitHub Release, and the relay image to `ghcr.io/<owner>/<repository>:<tag>` (owner and repository are lowercase). The QR encodes the release's direct CIA download URL for a CIA installer such as FBI; the release must be publicly accessible to the console. Prerelease tags create prereleases; no `latest` tag is published.
+Version tags such as `v1.2.3` or `v1.2.3-rc.1` publish `streetless.3dsx`, `streetless.cia`, `0004013000F5A302.cxi` and `streetless-cia-qr.png` to a GitHub Release, and the relay image to `ghcr.io/<owner>/<repository>:<tag>` (owner and repository are lowercase). The QR encodes the release's direct CIA download URL for a CIA installer such as FBI; the release must be publicly accessible to the console. Prerelease tags create prereleases; no `latest` tag is published.
 
 CECD wrappers are derived from [NetPass](https://gitlab.com/3ds-netpass/netpass) and retain their copyright notices. The code is distributed under GPL-3.0-or-later; see [LICENSE](LICENSE). Do not copy NetPass artwork or sound assets without satisfying their separate license.
