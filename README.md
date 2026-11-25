@@ -144,7 +144,7 @@ cc -std=c11 -Wall -Wextra -Werror -Ibackground/include background/source/lifecyc
 /tmp/streetless-bg-test
 ```
 
-GitHub Actions runs the Go and host tests, a Docker Compose HTTPS smoke test, and builds the client formats and background module. Passing CI is not a substitute for testing StreetPass, QR scanning, sleep/wake, and recovery on real hardware.
+GitHub Actions runs the Go and host tests, a Docker Compose HTTPS smoke test, and builds the client formats and background module for pull requests, pushes to `main`, and merge queues. Successful CI runs provide the client and background artifacts. Passing CI is not a substitute for testing StreetPass, QR scanning, sleep/wake, and recovery on real hardware.
 
 ### Debugging
 
@@ -179,7 +179,24 @@ Browser sessions expire after 24 hours. Passwords must be 8–128 UTF-8 bytes; c
 
 Issues and pull requests are welcome. Include reproduction steps and relevant logs, but remove credentials, pairing codes and native slot contents. Format changed Go code with `gofmt` and run the relevant tests. For device-specific changes, describe the model, firmware, Luma3DS version and hardware verification performed.
 
-Version tags such as `v1.2.3` or `v1.2.3-rc.1` publish both client formats, the background CXI and the CIA QR to a GitHub Release, plus the relay image to `ghcr.io/<owner>/<repository>:<tag>`. Prerelease tags create prereleases; no `latest` image tag is published.
+### Releases
+
+Merge changes through a pull request to `main` and wait for CI. Repository maintainers should configure branch protection or a ruleset to require review and the CI checks; workflow files alone do not enforce these policies.
+
+To release a commit that is already on `main`, create and push a version tag:
+
+```sh
+git switch main
+git pull --ff-only
+git tag -a v1.2.3-rc.1 -m "v1.2.3-rc.1"
+git push origin v1.2.3-rc.1
+```
+
+The release workflow validates the tag and its target, reruns CI on that commit, and publishes only after the checks pass. Stable tags such as `v1.2.3` create releases; prerelease tags such as `v1.2.3-rc.1` create prereleases. Use canonical `vMAJOR.MINOR.PATCH` versions, optionally with a prerelease suffix; build metadata is not supported by Docker tags. Do not move or reuse a published tag.
+
+Publication uses a draft release. If it fails after the draft is created, inspect the workflow logs and package state, delete the incomplete draft (not the tag), then rerun the failed workflow. Existing releases are never overwritten automatically.
+
+Each release contains both client formats, the background CXI and the CIA QR. The relay image is published as `ghcr.io/<owner>/<repository>:<tag>`; no `latest` tag is published.
 
 ## License and credits
 

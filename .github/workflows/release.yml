@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Validate version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+
+          tag = os.environ['GITHUB_REF_NAME']
+          match = re.fullmatch(
+              r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+              r'(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?', tag, re.ASCII)
+          # Build metadata is excluded because Docker tags cannot contain '+'.
+          if not match or len(tag) > 128:
+              raise SystemExit('Tag must be a canonical SemVer version prefixed with v, at most 128 characters')
+          prerelease = match.group(4)
+          if prerelease and any(part.isdigit() and len(part) > 1 and part[0] == '0'
+                                for part in prerelease.split('.')):
+              raise SystemExit('Numeric prerelease identifiers must not have leading zeroes')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f"prerelease={'true' if prerelease else 'false'}\n")
+          PY
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the tagged commit on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          tagged_commit=$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")
+          test "$tagged_commit" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$tagged_commit" refs/remotes/origin/main
+
+  ci:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  release:
+    needs: [validate, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: streetless-3ds
+          path: release
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: streetless-background
+          path: release
+      - name: Verify artifacts and generate CIA QR code
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s release/streetless.3dsx
+          test -s release/streetless.cia
+          test -s release/0004013000F5A302.cxi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qrencode
+          url=$(python3 - <<'PY'
+          import os
+          from urllib.parse import quote
+          print('https://github.com/{}/releases/download/{}/streetless.cia'.format(
+              os.environ['GITHUB_REPOSITORY'], quote(os.environ['GITHUB_REF_NAME'], safe='')))
+          PY
+          )
+          printf '%s' "$url" | qrencode -t PNG -o release/streetless-cia-qr.png
+          test -s release/streetless-cia-qr.png
+      - name: Build versioned container image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME}"
+          docker build --tag "$image" .
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "$PRERELEASE" = true ]; then
+            args+=(--prerelease)
+          fi
+          # Creating a draft fails if this tag already has a release; never overwrite it.
+          gh release create "$GITHUB_REF_NAME" release/streetless.3dsx release/streetless.cia \
+            release/0004013000F5A302.cxi release/streetless-cia-qr.png \
+            --verify-tag --draft --title "$GITHUB_REF_NAME" --generate-notes "${args[@]}"
+      - name: Push versioned container image
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io' EXIT
+          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME}"
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
