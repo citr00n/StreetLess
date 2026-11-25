@@ -2,169 +2,95 @@
 
 **StreetPass without touching grass.**
 
-Streetless brings Nintendo 3DS StreetPass encounters online through a self-hosted relay. The project is inspired by [NetPass](https://gitlab.com/3ds-netpass/netpass); it is an independent service, not affiliated with NetPass or Nintendo
+Streetless is an open-source Nintendo 3DS homebrew client and self-hosted relay for exchanging native StreetPass game data over the Internet. It is inspired by [NetPass](https://gitlab.com/3ds-netpass/netpass) and is independent of NetPass and Nintendo.
 
-In normal mode the client exchanges native game data over HTTPS/TCP, with an explicit relay IPv4 address so operation does not depend on DNS or UDP. An explicitly enabled debug mode also supports unencrypted HTTP for isolated development. Connectivity may still be affected by restrictions on the relay IP, TCP, TLS, or hostname. Only actual hardware testing can establish compatibility with a particular game or provider.
+> **Status:** the background module is experimental and has not been verified on physical 3DS hardware. Successful builds and automated tests do not establish compatibility with a particular game, console, or network.
+
+## Features
+
+- A public lobby with up to **five incoming random passes per rolling 24 hours**, plus a private mode that disables random exchange.
+- Confirmed friends, invite-only rooms, and directed sends. A website request is fulfilled when the sender's 3DS next syncs.
+- Per-game outgoing selection on the console, using local title names where available.
+- A player website and administrator dashboard. Registration is open by default; administrators can require approval.
+- Console pairing via a one-time QR code or manually entered code.
+- Manual sync and an optional, experimental background module.
+- An isolated debug mode for exporting native slots and creating targeted test deliveries.
+
+The relay is independent of Pretendo; Pretendo integration is not implemented. In production, the client uses HTTPS over IPv4/TCP and verifies the server certificate. The configured IPv4 avoids a DNS dependency on the 3DS, but cannot bypass blocks on the server IP, TCP, TLS, or hostname.
 
 ## Getting started
 
-1. Open your relay's website and register an account. On a relay configured to require approval, wait for an administrator to approve it.
-2. Install `streetless.3dsx` in `/3ds/streetless/` on the SD card and launch it with Homebrew Launcher, or install `streetless.cia` with a CIA installer on a suitably configured homebrew console.
-3. In your account, generate a one-time pairing code. On your 3DS, scan its QR code or enter the relay address, IPv4 address and pairing code. Codes expire after ten minutes. Never share a code with anyone you do not want to connect to your account. StreetPass must already be enabled in a supported game, such as Mii Plaza; select **Sync** to exchange game data.
-4. The public lobby is enabled by default and accepts at most five random incoming slots per rolling 24 hours. Switch it off for friends and invited rooms only. An explicit send requested on the site waits for the sender's next 3DS sync, whether manual or background; receiving also requires a sync on the recipient's console.
+### Requirements
 
-A pairing code is temporary and can be claimed only by one console. Pairing again replaces the previous 3DS credential. In normal mode the client verifies HTTPS certificates and does not fall back to plaintext. A QR image or code is sensitive until it expires: do not post it publicly or send it to an untrusted device.
+- A 3DS with Luma3DS and Homebrew Launcher, or a CIA installer on a suitably configured console.
+- A Streetless relay and an account on it. To run your own relay, see [DEPLOY.md](DEPLOY.md).
+- StreetPass already enabled in a supported game, such as Mii Plaza.
 
-On the console, **Outgoing games** lists native StreetPass titles by name where available, or by CEC ID if the name cannot be read. Use the D-pad and **A** to toggle titles; **X** saves and **B** cancels. Before the first save, all eligible titles are enabled as in earlier versions. After saving, newly discovered titles are off until enabled. The setting filters outgoing slots without deliberately disabling incoming slots, although games requiring a two-way exchange may not receive if their outgoing slot is off. Already staged or queued server deliveries cannot be recalled by this setting; sync again to replace the server's prior outbox snapshot.
+### Install and pair
 
-Preferences are stored separately from pairing in `/3ds/streetless/outgoing.bin`. If this file is missing after a selection was saved or is corrupt, sync fails closed. Restore it from a backup, or deliberately delete both `outgoing.bin` and `outgoing.protected` on the SD card to reset **all** titles to enabled.
+1. Download `streetless.3dsx` or `streetless.cia` from a project release or CI artifact. Copy the `.3dsx` to `SD:/3ds/streetless/streetless.3dsx`, or install the CIA with your CIA installer. The CIA requires CFW with signature patches.
+2. Register on your relay's website. If the relay requires approval, wait for an administrator to approve your account.
+3. In your account, generate a pairing code. In Streetless, choose **Pair console**, then scan the QR code or enter the relay hostname, IPv4 address, port and code.
+4. Select **Sync** to exchange passes. Pairing codes expire after ten minutes; do not share them. Pairing a new console replaces the previous console credential.
 
-Account passwords must be 8–128 UTF-8 bytes. Common passwords and trivial repeated or sequential patterns are rejected; this filter cannot guarantee a strong password, so use a unique password or passphrase. Browser sessions expire after 24 hours.
+Releases include `streetless-cia-qr.png`, which points to the release's CIA download for an installer such as FBI. The release must be publicly accessible to the console.
 
-The former web-key login has been removed. An administrator can set a username and password for an existing participant from the dashboard; this invalidates that participant's existing browser sessions without changing the 3DS credential.
+### Choose outgoing games
 
-## Running a relay
+Open **Outgoing games** in the client. Select a title with the D-pad, toggle it with **A**, save with **X**, or cancel with **B**. The client shows the game name when it can read local title metadata; otherwise it shows the exact CEC ID.
 
-Build the Docker image from the repository root:
+Before the first save, all eligible games are enabled. After saving, newly discovered games are disabled until selected. This setting filters outgoing slots, not incoming metadata; however, games requiring a two-way exchange may not receive without an outgoing slot. Already staged or queued deliveries cannot be recalled by a local selection change. Sync again to replace the relay's prior outbox snapshot.
 
-```sh
-docker build -t streetless:local .
-```
+Preferences are stored independently of pairing in `SD:/3ds/streetless/outgoing.bin`. If saved preferences are missing or corrupt, sync fails closed. Restore the file from a backup, or deliberately delete both `outgoing.bin` and `outgoing.protected` on the SD card to reset **all** titles to enabled.
 
-The image contains only the server binary and runs as an unprivileged user by default. Its `/data` directory must be mounted from persistent, writable storage. The examples below run Docker as a non-root host user and explicitly use that user's UID and GID so the bind-mounted data and secrets are accessible.
+## Background sync
 
-**The production website and 3DS API require HTTPS.** The normal client verifies the TLS certificate and does not support plain HTTP. Use either direct TLS in Streetless or TLS termination at a reverse proxy. Proxy mode uses plain HTTP only on the same host's loopback interface; never expose that backend port. The separate debug mode described below is for isolated development only.
+The optional `0004013000F5A302.cxi` module is **experimental and unverified on physical 3DS hardware**. It requires Luma3DS 13 or newer and a production HTTPS relay. The CIA QR installs only the foreground app, not this module.
 
-Point a domain at the relay's public IPv4 address and obtain a certificate for that domain, including its full certificate chain. The default 3DS client trusts ISRG Root X1; use a compatible certificate chain or build the client with a different trusted root as described below. Open the public TCP port in the host firewall and provider's firewall.
+1. Copy the module to `SD:/luma/sysmodules/0004013000F5A302.cxi`. Do not overwrite an existing file with that name without checking it first.
+2. Hold **SELECT** while booting and enable **Enable loading external FIRMs and modules** in Luma's configuration.
+3. Pair the console, choose outgoing games, then select **Background sync** in Streetless and confirm the warning. Once the service reports it connected, Streetless can be closed.
+4. Start the service manually again after each power-on. Reopen **Background sync** to check its status or stop it.
 
-Create an administrator password and hash once. Keep the password in a password manager; never commit the hash file, TLS key or SQLite database:
+The module attempts a sync immediately and every 15 minutes while the console is awake and networking is available. It also sends selected outgoing slots through allowed routes. Sleep-mode networking and delivery are not guaranteed. Manual Sync, pairing, slot export and outgoing-game selection require a confirmed stop; the client prompts for it.
 
-```sh
-umask 077
-mkdir -p "$HOME/.local/share/streetless"
-ADMIN_PASSWORD=$(openssl rand -hex 32)
-printf '%s\n' "$ADMIN_PASSWORD" > "$HOME/.local/share/streetless/admin-password.txt"
-printf '%s' "$ADMIN_PASSWORD" | openssl dgst -sha256 -r | cut -d ' ' -f1 \
-  > "$HOME/.local/share/streetless/admin.sha256"
-unset ADMIN_PASSWORD
-```
+If the service cannot be stopped or its status is uncertain, power the console off completely. Remove the module from the SD card if needed. A stale or damaged `SD:/3ds/streetless/background.pending` marker may be removed **only while the console is completely powered off**, after confirming the module is not running.
 
-Set the public options on the Docker host. Replace the domain and example IPv4 with the **public** address of the direct listener or proxy:
+## Relay deployment
 
-```sh
-export STREETLESS_ORIGIN=https://streetless.example.org
-export STREETLESS_PUBLIC_IPV4=203.0.113.10
-export STREETLESS_DATA="$HOME/.local/share/streetless"
-```
+See [DEPLOY.md](DEPLOY.md) for Docker and Compose setup, direct HTTPS, same-host reverse proxy configuration, administrator credentials, backups and operational settings.
 
-`STREETLESS_ORIGIN` is the public HTTPS origin, without a path or trailing slash. Include a non-default public port, for example `https://streetless.example.org:8443`; omit `:443`. The public IPv4 and origin are used for 3DS pairing and must be reachable by the console.
+## Development
 
-### Option 1: Direct HTTPS
+### Prerequisites
 
-Streetless terminates TLS itself. Set paths to the full certificate chain and private key on the Docker host. Both files must be readable by the chosen host user; do not make the private key publicly readable. Open TCP 8443 for this example:
+- Go 1.26+, a host C compiler, libcurl development headers, Python 3, and OpenSSL.
+- [devkitPro](https://devkitpro.org/wiki/Getting_Started) with `3ds-dev`, `3ds-curl` and `3ds-jansson`.
+- `makerom` and `bannertool` on `PATH` to build the CIA; `makerom` is also needed for the background CXI. Docker is optional.
 
-```sh
-export STREETLESS_ORIGIN=https://streetless.example.org:8443
-export TLS_CERT=/absolute/path/to/fullchain.pem
-export TLS_KEY=/absolute/path/to/privkey.pem
-docker run -d --name streetless --restart unless-stopped \
-  --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
-  -p 8443:8443 \
-  --mount "type=bind,src=$STREETLESS_DATA,dst=/data" \
-  --mount "type=bind,src=$TLS_CERT,dst=/tls/fullchain.pem,readonly" \
-  --mount "type=bind,src=$TLS_KEY,dst=/tls/privkey.pem,readonly" \
-  -e STREETLESS_ORIGIN -e STREETLESS_PUBLIC_IPV4 \
-  -e STREETLESS_TRANSPORT=direct -e STREETLESS_LISTEN=0.0.0.0:8443 \
-  -e STREETLESS_ADMIN_HASH_FILE=/data/admin.sha256 \
-  -e STREETLESS_TLS_CERT=/tls/fullchain.pem -e STREETLESS_TLS_KEY=/tls/privkey.pem \
-  streetless:local
-```
+`server/` contains the Go relay, SQLite store, templates and assets; `client/` contains the 3DS application and host tests; `background/` contains the optional module.
 
-For external port 443, omit `:8443` from `STREETLESS_ORIGIN` and replace `-p 8443:8443` with `-p 443:8443`. The process still listens on unprivileged port 8443 inside the container. The database persists in `STREETLESS_DATA`; back it up along with its SQLite WAL files while the server is stopped.
+### Build
 
-#### Docker Compose
-
-The [Compose example](compose.yaml) runs the same direct-HTTPS configuration. After creating the administrator hash and setting the common public options above, export the host user's numeric UID and GID and the absolute certificate paths:
+From the repository root:
 
 ```sh
-export STREETLESS_UID="$(id -u)"
-export STREETLESS_GID="$(id -g)"
-export STREETLESS_ORIGIN=https://streetless.example.org:8443
-export STREETLESS_PORT=8443
-export TLS_CERT=/absolute/path/to/fullchain.pem
-export TLS_KEY=/absolute/path/to/privkey.pem
-docker compose up -d --build
+# Relay
+(cd server && go build ./cmd/streetlessd)
+
+# 3DSX only; no CIA packaging tools required
+make -C client streetless.3dsx
+
+# 3DSX and CIA; requires makerom and bannertool
+make -C client
+
+# Optional background CXI; requires makerom
+make -C background
 ```
 
-The data directory and both certificate files must already exist and be accessible to that UID/GID. Compose mounts the certificates read-only and persists the database and administrator hash in `STREETLESS_DATA`. For public port 443 set `STREETLESS_PORT=443` and remove `:8443` from `STREETLESS_ORIGIN`. Use `docker compose logs -f` to view logs, `docker compose restart` after certificate renewal, and `docker compose down` to stop the container; the bind-mounted data is retained. This example is for direct HTTPS; for a same-host reverse proxy use the proxy instructions below.
+The outputs are `client/streetless.3dsx`, `client/streetless.cia` and `background/0004013000F5A302.cxi`. The client and module embed ISRG Root X1 by default. For a test CA, rebuild **both** with `CA_FILE=/absolute/path/to/root.pem`.
 
-### Option 2: Same-host reverse proxy
-
-The proxy terminates HTTPS and forwards requests over loopback. On a **native Linux Docker host**, host networking lets Streetless bind to the same loopback interface as the proxy; do not publish or expose port 8080. Local processes can reach the backend, so use a trusted host:
-
-```sh
-export STREETLESS_ORIGIN=https://streetless.example.org
-docker run -d --name streetless --restart unless-stopped --network host \
-  --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
-  --mount "type=bind,src=$STREETLESS_DATA,dst=/data" \
-  -e STREETLESS_ORIGIN -e STREETLESS_PUBLIC_IPV4 \
-  -e STREETLESS_TRANSPORT=proxy -e STREETLESS_LISTEN=127.0.0.1:8080 \
-  -e STREETLESS_ADMIN_HASH_FILE=/data/admin.sha256 \
-  streetless:local
-```
-
-`STREETLESS_ORIGIN` must be the **external HTTPS origin**, not the loopback address. Proxy mode accepts only a literal `127.0.0.1` listener and does not use TLS certificate paths. Docker Desktop host networking has different availability and semantics; alternatively use direct HTTPS and a reverse proxy that verifies the upstream certificate.
-
-For example, add this nginx `server` block to the host's HTTP configuration. Replace the hostname and certificate paths, then run `nginx -t` and reload nginx:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name streetless.example.org;
-    ssl_certificate /etc/nginx/tls/streetless.fullchain.pem;
-    ssl_certificate_key /etc/nginx/tls/streetless.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_early_data off;
-    access_log off;
-    client_max_body_size 2m;
-    client_body_timeout 20s;
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $http_host;
-        proxy_set_header Connection "";
-        proxy_set_header Forwarded "";
-        proxy_set_header X-Forwarded-Host "";
-        proxy_set_header X-Forwarded-Proto "";
-        proxy_set_header X-Forwarded-Port "";
-        proxy_set_header X-Forwarded-For "";
-        proxy_set_header X-Real-IP "";
-        proxy_connect_timeout 5s;
-        proxy_send_timeout 20s;
-        proxy_read_timeout 25s;
-        proxy_request_buffering off;
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_next_upstream off;
-        proxy_redirect off;
-        proxy_intercept_errors off;
-    }
-}
-```
-
-Preserve the public `Host` header and mount Streetless at the root of its own origin, not under a URL prefix. For a proxy on another host, use direct TLS to the backend, restrict the upstream port with a firewall, and configure the proxy to verify the upstream certificate and hostname.
-
-### Verify and operate
-
-Open `https://streetless.example.org/healthz` (include the port if not 443); a healthy server returns `ok`. The website is at `/` and the account dashboard at `/me`. Sign in at `/login` as `admin` using the password in `admin-password.txt` to access the admin dashboard. Registration is open by default; an administrator can require approval in dashboard settings and approve pending registrations there. Revocation cannot recall a pass already committed on a console.
-
-Use `docker logs streetless` to inspect startup errors and `docker stop streetless` to stop the server. To change configuration, remove the stopped container and run the appropriate command again; the data directory remains intact. In direct mode, restart the container after renewing the mounted certificate files. In proxy mode, reload the proxy after renewing its certificate.
-
-## Building the 3DS client
-
-Install devkitPro with `3ds-dev`, `3ds-curl` and `3ds-jansson`, Python 3, and compatible `makerom` and `bannertool` executables on `PATH`. Run `make -C client` to build both formats. To build only the Homebrew Launcher version without the CIA packaging tools, run `make -C client streetless.3dsx`.
-
-For example, on an x86-64 Linux build host with Git, make and a C compiler, build the same pinned packaging tools used in CI:
+To build the same pinned CIA packaging tools used in CI on an x86-64 Linux host:
 
 ```sh
 D=$(mktemp -d)
@@ -181,41 +107,45 @@ cp "$D/project-ctr/makerom/bin/makerom" "$D/bannertool/output/linux-x86_64/banne
 export STREETLESS_CIA_TOOLS="$D/tools"
 ```
 
-With these Linux tools, use the matching x86-64 devkitPro Docker image from the repository root:
+These Linux binaries can be mounted into the matching devkitPro container:
 
 ```sh
 docker run --rm --platform linux/amd64 -v "$PWD:/work" \
   -v "$STREETLESS_CIA_TOOLS:/streetless-tools:ro" -w /work \
   devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5 \
-  sh -lc 'dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson python && PATH="/streetless-tools:$PATH" make -C client'
+  sh -lc 'dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson python && export PATH="/streetless-tools:$PATH" && make -C client && make -C background'
 ```
 
-The outputs are `client/streetless.3dsx` and `client/streetless.cia`. The CIA is unsigned homebrew and requires Luma3DS/CFW with signature patches. On systems without compatible packaging tools, use the CI artifacts or build only `.3dsx`. For a test CA, rebuild with `make -C client CA_FILE=/absolute/path/to/root.pem`. A real console needs current system software and Luma3DS; neither emulator fixtures nor a successful build establish hardware compatibility.
+### Tests
 
-## Background sync (experimental)
+```sh
+(cd server && go test ./... && go vet ./...)
 
-The optional background module has **not yet been verified on physical 3DS hardware**. It requires Luma3DS 13 or newer and production HTTPS; it does not run in debug HTTP mode. It must be started manually once after each power-on. While the console is awake and networking is available, it attempts a sync immediately and then every 15 minutes, including after Streetless is closed. Sleep-mode networking and delivery are not guaranteed. Automatic sync also sends selected outgoing game slots through your allowed routes.
+cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test
+/tmp/streetless-wire-test
+cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/pair.c client/source/config.c client/tests/pair_test.c -o /tmp/streetless-pair-test
+/tmp/streetless-pair-test
+cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_debug_test.c -lcurl -o /tmp/streetless-http-test
+/tmp/streetless-http-test
+cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_ca_blob_test.c -lcurl -o /tmp/streetless-ca-test
+python3 client/tests/http_ca_blob_test.py /tmp/streetless-ca-test
+cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/title_names.c client/tests/title_names_test.c -o /tmp/streetless-title-test
+/tmp/streetless-title-test
+cc -std=c11 -Wall -Wextra -Werror -DSTREETLESS_SELECTION_HOST_TEST -Iclient/include client/source/selection.c client/tests/selection_test.c -o /tmp/streetless-selection-test
+/tmp/streetless-selection-test
+cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -DSTREETLESS_SELECTION_HOST_TEST -DSTREETLESS_SELECTION_STORAGE_TEST -Iclient/include client/source/selection.c client/tests/selection_storage_test.c -o /tmp/streetless-selection-storage-test
+/tmp/streetless-selection-storage-test
+cc -std=c11 -Wall -Wextra -Werror -Ibackground/include background/source/lifecycle.c background/tests/lifecycle_test.c -o /tmp/streetless-bg-test
+/tmp/streetless-bg-test
+```
 
-1. Copy the release asset `0004013000F5A302.cxi` to `SD:/luma/sysmodules/0004013000F5A302.cxi`. Do not overwrite an existing file with that name without checking it first. The CIA QR installs only the foreground app, not the module.
-2. Hold **SELECT** during boot and enable **Enable loading external FIRMs and modules** in Luma's configuration. This adds a new module; it does not replace a built-in module.
-3. Pair Streetless with the production relay and choose your outgoing games. In the client select **Background sync** and confirm the warning. Close Streetless after the service reports it connected. Start the service again after each reboot.
-4. Reopen **Background sync** to check its status or stop it. Manual Sync, pairing, slot export and outgoing-game selection require a confirmed stop first; Streetless prompts for it. An error or uncertain launch blocks those operations rather than risking concurrent CECD access.
+GitHub Actions runs the Go and host tests, a Docker Compose HTTPS smoke test, and builds the client formats and background module. Passing CI is not a substitute for testing StreetPass, QR scanning, sleep/wake, and recovery on real hardware.
 
-If the module cannot be stopped or its status remains uncertain, power the console off completely. If necessary, remove `SD:/luma/sysmodules/0004013000F5A302.cxi` to disable the module. A stale or damaged `SD:/3ds/streetless/background.pending` marker can be removed **only while the console is completely powered off**, after confirming the module is not running. Never remove it to bypass a running or uncertain service.
+### Debugging
 
-Build the module with `make -C background`. It embeds the same default CA as the app; when using a custom CA, build **both** client and module with `CA_FILE=/absolute/path/to/root.pem`. The CI artifact `streetless-background` and tagged GitHub Releases include the module separately.
+**Use debug mode only on an isolated, trusted network with a separate test database and disposable accounts.** HTTP exposes passwords, pairing codes, console tokens, game data and the debug PIN. The four-digit PIN is not encryption and cannot authenticate a server against an active network attacker.
 
-## Debug mode and test deliveries
-
-**Debug mode is unsafe on an untrusted network.** HTTP exposes account passwords, console tokens, pairing codes, native slots and the debug PIN. A four-digit PIN is not encryption and cannot authenticate a server against an active network attacker. Use a separate test database and disposable accounts on an isolated LAN; never expose the debug listener to the Internet or use production credentials or game data without consent.
-
-Start the server with `STREETLESS_DEBUG=1` or the `--debug` argument. Debug mode accepts an `http://` origin and prints a new four-digit PIN to the server console at every start. The console's debug mode requires this PIN and verifies that it is connecting to a debug server before sending credentials or game data; a normal production server cannot be used as a debug server. Re-enter the PIN after restarting the server. Normal mode continues to require HTTPS with certificate verification.
-
-On the 3DS, choose **Debug mode** in the main menu, accept the plaintext warning and enter the server PIN. Pair the console using the account's QR code or manual details. Choose **Debug mode** again and press **A** to enter a new PIN, or **X** to return to production HTTPS. The PIN is held only in memory and debug mode resets when the application exits. **Export local slot** appears only while debug mode is enabled.
-
-Admin test deliveries are available only on a debug server. The administrator may select any active participant; no recipient opt-in is required. Export an original native slot using the debug option in the client, then upload `/3ds/streetless/test-XXXXXXXX.slot` on the admin dashboard. Only export and share slots with their owner's consent. A test delivery expires after 24 hours, does not generate an automatic return pass and does not consume the public-lobby quota. A valid pass is committed before ACK; confirmed malformed slots and invalid HMACs are rejected, while full inboxes and temporary errors leave the pass queued.
-
-For a loopback-only development server on the same machine, from the repository root:
+For a loopback-only relay, from the repository root:
 
 ```sh
 umask 077
@@ -230,53 +160,24 @@ env -u STREETLESS_TRANSPORT \
   go run ./cmd/streetlessd
 ```
 
-Open `http://localhost:8080/` on that machine and sign in as `admin` with the password in `$D/admin-password.txt`. To connect a real 3DS, use a trusted isolated LAN, set `STREETLESS_LISTEN` and `STREETLESS_PUBLIC_IPV4` to the host's reachable LAN IPv4, and set `STREETLESS_ORIGIN` to a hostname and port the browser uses for the relay. The 3DS connects to the configured IPv4 directly. Preserve `D` if you need to reuse this test database; delete it only when its test data is no longer needed.
+Open `http://localhost:8080/` on that machine; the admin username is `admin`, with the password in `$D/admin-password.txt`. `--debug` is an alternative to `STREETLESS_DEBUG=1`. The server prints a fresh four-digit PIN on each start. To use a real 3DS, configure a hostname and reachable LAN IPv4 for the isolated test relay.
 
-## Development
+On the 3DS, select **Debug mode**, accept the warning, enter the PIN and pair with the debug relay. Select **Debug mode** again and press **A** to enter a new PIN, or **X** to return to production HTTPS. The PIN is memory-only and debug mode resets on exit. A debug client probes the server before sending credentials or game data; production clients do not fall back to HTTP.
 
-Prerequisites: Go 1.26+, a C compiler, OpenSSL, and devkitPro with `3ds-dev`, `3ds-curl`, and `3ds-jansson`. Docker is optional for reproducing the container and client builds. `server/` contains the Go relay and SQLite store; `client/` contains the 3DS application, native CECD code, and host-side codec tests. The server embeds the HTML templates and CSS from `server/internal/web/`.
+In debug mode, **Export local slot** saves an original native slot to `SD:/3ds/streetless/test-XXXXXXXX.slot`. The administrator can upload it for any active participant without a separate opt-in. Test deliveries expire after 24 hours, do not consume public-lobby quota, and use normal ACK/reject handling. Export and share native data only with its owner's consent. The background module does not use debug HTTP.
 
-Run the server checks from the repository root:
+## Privacy and security
 
-```sh
-cd server
-go test ./...
-go vet ./...
-cd ..
-```
+Relay operators can access stored native slot data, which can contain game identifiers and names. Participants must trust their relay operator. Game HMAC keys remain on the console; malformed deliveries and confirmed HMAC mismatches are rejected separately from successful ACKs. Temporary CECD failures and full inboxes leave deliveries queued.
 
-Run the portable client tests and build the console application:
+Browser sessions expire after 24 hours. Passwords must be 8–128 UTF-8 bytes; common passwords and trivial repeated or sequential patterns are rejected, but this filter cannot guarantee strength. Use a unique password or passphrase. Never commit relay databases, administrator credentials, TLS keys, pairing codes or exported slots.
 
-```sh
-cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test
-/tmp/streetless-wire-test
-cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/pair.c client/source/config.c client/tests/pair_test.c -o /tmp/streetless-pair-test
-/tmp/streetless-pair-test
-cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_debug_test.c -lcurl -o /tmp/streetless-http-test
-/tmp/streetless-http-test
-cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/title_names.c client/tests/title_names_test.c -o /tmp/streetless-title-test
-/tmp/streetless-title-test
-cc -std=c11 -Wall -Wextra -Werror -DSTREETLESS_SELECTION_HOST_TEST -Iclient/include client/source/selection.c client/tests/selection_test.c -o /tmp/streetless-selection-test
-/tmp/streetless-selection-test
-cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -DSTREETLESS_SELECTION_HOST_TEST -DSTREETLESS_SELECTION_STORAGE_TEST -Iclient/include client/source/selection.c client/tests/selection_storage_test.c -o /tmp/streetless-selection-storage-test
-/tmp/streetless-selection-storage-test
-cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_ca_blob_test.c -lcurl -o /tmp/streetless-ca-test
-python3 client/tests/http_ca_blob_test.py /tmp/streetless-ca-test
-cc -std=c11 -Wall -Wextra -Werror -Ibackground/include background/source/lifecycle.c background/tests/lifecycle_test.c -o /tmp/streetless-bg-test
-/tmp/streetless-bg-test
-make -C client
-make -C background
-```
+## Contributing
 
-For a local debug relay, see the debug instructions above. Keep its database, credentials, and native slot exports separate from production and out of version control. Format changed Go code with `gofmt`; run the relevant tests before opening a pull request. Cross-compilation and synthetic fixtures do not substitute for a two-console hardware test.
+Issues and pull requests are welcome. Include reproduction steps and relevant logs, but remove credentials, pairing codes and native slot contents. Format changed Go code with `gofmt` and run the relevant tests. For device-specific changes, describe the model, firmware, Luma3DS version and hardware verification performed.
 
-## Verification
+Version tags such as `v1.2.3` or `v1.2.3-rc.1` publish both client formats, the background CXI and the CIA QR to a GitHub Release, plus the relay image to `ghcr.io/<owner>/<repository>:<tag>`. Prerelease tags create prereleases; no `latest` image tag is published.
 
-- `cd server && go test ./...` exercises the server, SQLite routing and proxy behavior.
-- From the repository root: `cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test && /tmp/streetless-wire-test`.
-- GitHub Actions runs the Go tests and vet, native client and lifecycle tests, a Docker Compose HTTPS smoke test, and builds both 3DS client formats plus the background module. After the checks pass, download the `streetless-3ds` and `streetless-background` workflow artifacts.
-- Verify QR scanning, pairing and StreetPass delivery on real 3DS hardware. A successful server test or cross-compilation is not hardware proof.
+## License and credits
 
-Version tags such as `v1.2.3` or `v1.2.3-rc.1` publish `streetless.3dsx`, `streetless.cia`, `0004013000F5A302.cxi` and `streetless-cia-qr.png` to a GitHub Release, and the relay image to `ghcr.io/<owner>/<repository>:<tag>` (owner and repository are lowercase). The QR encodes the release's direct CIA download URL for a CIA installer such as FBI; the release must be publicly accessible to the console. Prerelease tags create prereleases; no `latest` tag is published.
-
-CECD wrappers are derived from [NetPass](https://gitlab.com/3ds-netpass/netpass) and retain their copyright notices. The code is distributed under GPL-3.0-or-later; see [LICENSE](LICENSE). Do not copy NetPass artwork or sound assets without satisfying their separate license.
+Streetless code is distributed under **GPL-3.0-or-later**; see [LICENSE](LICENSE). CECD wrappers derive from [NetPass](https://gitlab.com/3ds-netpass/netpass) and retain their original copyright notices. The bundled QR decoder has its own [ISC license](client/quirc/LICENSE). Do not copy NetPass artwork or sound assets without satisfying their separate license.
