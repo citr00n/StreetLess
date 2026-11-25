@@ -67,10 +67,7 @@ bool selection_set(Selection *selection, uint32_t id, bool enabled) {
     return true;
 }
 
-#ifndef STREETLESS_SELECTION_HOST_TEST
-#include "cecd.h"
-#include "title_names.h"
-#include "ui.h"
+#if !defined(STREETLESS_SELECTION_HOST_TEST) || defined(STREETLESS_SELECTION_STORAGE_TEST)
 #include <errno.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -79,6 +76,7 @@ bool selection_set(Selection *selection, uint32_t id, bool enabled) {
 #define SELECTION_DIR "sdmc:/3ds/streetless"
 #define SELECTION_PATH SELECTION_DIR "/outgoing.bin"
 #define SELECTION_TMP SELECTION_DIR "/outgoing.bin.tmp"
+#define SELECTION_MARKER SELECTION_DIR "/outgoing.protected"
 
 static bool ensure_dir(const char *path);
 static bool save_failed;
@@ -89,6 +87,10 @@ bool selection_load(Selection *selection) {
     FILE *file = fopen(SELECTION_PATH, "rb");
     if (!file) {
         if (errno != ENOENT) return false;
+        struct stat marker;
+        /* A missing committed file is only a first run if no selection has
+         * ever been saved. A failed FAT rename must never re-enable all. */
+        if (stat(SELECTION_MARKER, &marker) == 0 || errno != ENOENT) return false;
         *selection = (Selection){.initial = true};
         return true;
     }
@@ -113,6 +115,11 @@ bool selection_save(const Selection *selection) {
         save_failed = true;
         return false;
     }
+    FILE *marker = fopen(SELECTION_MARKER, "ab");
+    if (!marker) { save_failed = true; return false; }
+    bool protected = fflush(marker) == 0 && fsync(fileno(marker)) == 0;
+    if (fclose(marker) != 0) protected = false;
+    if (!protected) { save_failed = true; return false; }
     FILE *file = fopen(SELECTION_TMP, "wb");
     if (!file) { save_failed = true; return false; }
     bool ok = fwrite(data, 1, size, file) == size && fflush(file) == 0 && fsync(fileno(file)) == 0;
@@ -122,11 +129,17 @@ bool selection_save(const Selection *selection) {
     save_failed = true;
     return false;
 }
+#endif
+
+#ifndef STREETLESS_SELECTION_HOST_TEST
+#include "cecd.h"
+#include "title_names.h"
+#include "ui.h"
 
 bool selection_menu(void) {
     Selection selection;
     if (!selection_load(&selection)) {
-        ui_message("Outgoing preferences are unreadable or invalid.\nNo passes can be sent. Repair the file on SD;\nit was not overwritten.");
+        ui_message("Outgoing preferences missing or invalid.\nSending is disabled. Restore outgoing.bin,\nor delete it and outgoing.protected to\nreset ALL games ON. Both are on the SD.");
         return true;
     }
     consoleClear();
@@ -179,7 +192,7 @@ bool selection_menu(void) {
                 ui_message("Too many selected games; disable one first.");
         } else if (keys & KEY_X) {
             if (selection_save(&selection)) ui_message("Outgoing preferences saved on this console.");
-            else ui_message("Could not save outgoing preferences.\nPrevious settings were not overwritten.");
+            else ui_message("Could not save outgoing preferences.\nSending is disabled until preferences\ncan be read safely.");
             break;
         }
     }

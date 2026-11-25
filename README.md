@@ -15,6 +15,10 @@ In normal mode the client exchanges native game data over HTTPS/TCP, with an exp
 
 A pairing code is temporary and can be claimed only by one console. Pairing again replaces the previous 3DS credential. In normal mode the client verifies HTTPS certificates and does not fall back to plaintext. A QR image or code is sensitive until it expires: do not post it publicly or send it to an untrusted device.
 
+On the console, **Outgoing games** lists native StreetPass titles by name where available, or by CEC ID if the name cannot be read. Use the D-pad and **A** to toggle titles; **X** saves and **B** cancels. Before the first save, all eligible titles are enabled as in earlier versions. After saving, newly discovered titles are off until enabled. The setting filters outgoing slots without deliberately disabling incoming slots, although games requiring a two-way exchange may not receive if their outgoing slot is off. Already staged or queued server deliveries cannot be recalled by this setting; sync again to replace the server's prior outbox snapshot.
+
+Preferences are stored separately from pairing in `/3ds/streetless/outgoing.bin`. If this file is missing after a selection was saved or is corrupt, sync fails closed. Restore it from a backup, or deliberately delete both `outgoing.bin` and `outgoing.protected` on the SD card to reset **all** titles to enabled.
+
 Account passwords must be 8–128 UTF-8 bytes. Common passwords and trivial repeated or sequential patterns are rejected; this filter cannot guarantee a strong password, so use a unique password or passphrase. Browser sessions expire after 24 hours.
 
 The former web-key login has been removed. An administrator can set a username and password for an existing participant from the dashboard; this invalidates that participant's existing browser sessions without changing the 3DS credential.
@@ -237,6 +241,12 @@ cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/pair.c client/s
 /tmp/streetless-pair-test
 cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_debug_test.c -lcurl -o /tmp/streetless-http-test
 /tmp/streetless-http-test
+cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/title_names.c client/tests/title_names_test.c -o /tmp/streetless-title-test
+/tmp/streetless-title-test
+cc -std=c11 -Wall -Wextra -Werror -DSTREETLESS_SELECTION_HOST_TEST -Iclient/include client/source/selection.c client/tests/selection_test.c -o /tmp/streetless-selection-test
+/tmp/streetless-selection-test
+cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -DSTREETLESS_SELECTION_HOST_TEST -DSTREETLESS_SELECTION_STORAGE_TEST -Iclient/include client/source/selection.c client/tests/selection_storage_test.c -o /tmp/streetless-selection-storage-test
+/tmp/streetless-selection-storage-test
 make -C client
 ```
 
