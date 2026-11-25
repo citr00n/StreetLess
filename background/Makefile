@@ -26,6 +26,8 @@ build/%.o: source/%.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
+build/client-sync.o: CFLAGS += -DSTREETLESS_BACKGROUND
+
 build/client-%.o: ../client/source/%.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@

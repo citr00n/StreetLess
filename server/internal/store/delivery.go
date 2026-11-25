@@ -56,7 +56,15 @@ func putDelivery(ctx context.Context, tx *sql.Tx, sender, recipient int64, title
 	var id int64
 	err := tx.QueryRowContext(ctx, `INSERT INTO deliveries(sender_id,recipient_id,title,slot,message_count,message_bytes,largest_message,route,room_id,created_at)
 		VALUES(NULLIF(?,0),?,?,?,?,?,?,?,NULLIF(?,0),?) RETURNING id`, sender, recipient, title, slot, v.Count, v.Bytes, v.Largest, route, room, now).Scan(&id)
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+	if route != "test" {
+		if _, err := tx.ExecContext(ctx, `UPDATE participants SET queued_total=queued_total+1 WHERE id=?`, sender); err != nil {
+			return 0, err
+		}
+	}
+	return id, nil
 }
 
 func publicUsed(ctx context.Context, tx *sql.Tx, id, now int64) (int, error) {

@@ -45,6 +45,16 @@ Before the first save, all eligible games are enabled. After saving, newly disco
 
 Preferences are stored independently of pairing in `SD:/3ds/streetless/outgoing.bin`. If saved preferences are missing or corrupt, sync fails closed. Restore the file from a backup, or deliberately delete both `outgoing.bin` and `outgoing.protected` on the SD card to reset **all** titles to enabled.
 
+### Check outgoing passes
+
+After a successful manual Sync, the client lists the selected game slots uploaded to the relay. Uploading a slot does not mean that a recipient has been found or that a pass has been received.
+
+The public-lobby status lists game slots currently staged for random matching. The console resolves installed game names where possible; the website displays CEC IDs. Staging does not mean another player has received a pass. A match requires another eligible player with a compatible game and available capacity. If the lobby is disabled, the snapshot has expired, or a game has no eligible outgoing slot, that game is not listed. A friends-only native slot is skipped rather than sent.
+
+During manual Sync, the console shows its progress while looking up local game names. Uploaded and public-lobby lists share one lookup. If installed metadata is unavailable or conflicting, the client shows the CEC ID instead of guessing a title.
+
+The client and account page also show the number of outgoing deliveries queued for other players since this counter was introduced. One slot queued to multiple recipients counts once per recipient; administrator test deliveries do not count. The total persists after deliveries are removed, so it is not the current queue size and does not confirm receipt. Existing deliveries from before the upgrade are not included.
+
 ## Background sync
 
 The optional `0004013000F5A302.cxi` module is **experimental and unverified on physical 3DS hardware**. It requires Luma3DS 13 or newer and a production HTTPS relay. The CIA QR installs only the foreground app, not this module.
@@ -144,6 +154,8 @@ cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/t
 python3 client/tests/http_ca_blob_test.py /tmp/streetless-ca-test
 cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/title_names.c client/tests/title_names_test.c -o /tmp/streetless-title-test
 /tmp/streetless-title-test
+cc -std=c11 -Wall -Wextra -Werror -D__3DS__ -Iclient/tests/title_stubs -Iclient/include client/source/title_names.c client/tests/title_names_3ds_test.c -o /tmp/streetless-title-3ds-test
+/tmp/streetless-title-3ds-test
 cc -std=c11 -Wall -Wextra -Werror -DSTREETLESS_SELECTION_HOST_TEST -Iclient/include client/source/selection.c client/tests/selection_test.c -o /tmp/streetless-selection-test
 /tmp/streetless-selection-test
 cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -DSTREETLESS_SELECTION_HOST_TEST -DSTREETLESS_SELECTION_STORAGE_TEST -Iclient/include client/source/selection.c client/tests/selection_storage_test.c -o /tmp/streetless-selection-storage-test

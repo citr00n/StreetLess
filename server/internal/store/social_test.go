@@ -59,6 +59,8 @@ func TestSocialRoutes(t *testing.T) {
 	}
 	mustSync(t, s, a, newer)
 	id := expectSlot(t, mustSync(t, s, b, recv), newer)
+	assertQueued(t, s, a, 1)
+	assertQueued(t, s, b, 0)
 	if len(mustSync(t, s, c, recv)) != 0 || len(mustSync(t, s, d, recv)) != 0 {
 		t.Fatal("direct pass leaked")
 	}
@@ -68,6 +70,7 @@ func TestSocialRoutes(t *testing.T) {
 	if st := viewFor(t, s, a).Sends[0].State; st != "queued" {
 		t.Fatalf("unexpected state %s", st)
 	}
+	assertQueued(t, s, a, 1)
 
 	action(t, s, a, Action{Kind: "room_create", Name: "QA"})
 	r := viewFor(t, s, a).Rooms[0].ID
@@ -89,11 +92,37 @@ func TestSocialRoutes(t *testing.T) {
 	if v := viewFor(t, s, c); v.Me.PendingInbox != 1 {
 		t.Fatalf("room pass not queued: %+v", v.Me)
 	}
+	assertQueued(t, s, a, 2)
 	action(t, s, c, Action{Kind: "room_set", RoomID: r, Enabled: false})
 	action(t, s, c, Action{Kind: "room_set", RoomID: r, Enabled: true})
 	if len(mustSync(t, s, c, recv)) != 0 {
 		t.Fatal("room pass revived after mute")
 	}
+	assertQueued(t, s, a, 2)
+}
+
+func TestRoomQueuedTotalPerRecipient(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	a, _ := testPeer(t, s, "sender")
+	b, _ := testPeer(t, s, "first")
+	c, _ := testPeer(t, s, "second")
+	for _, p := range []Principal{a, b, c} {
+		action(t, s, p, Action{Kind: "public_set", Enabled: false})
+	}
+	friendPair(t, s, a, b)
+	friendPair(t, s, a, c)
+	action(t, s, a, Action{Kind: "room_create", Name: "room"})
+	room := viewFor(t, s, a).Rooms[0].ID
+	for _, p := range []Principal{b, c} {
+		action(t, s, a, Action{Kind: "room_invite", RoomID: room, ID: p.ID})
+		action(t, s, p, Action{Kind: "room_accept", RoomID: room})
+		mustSync(t, s, p, titleSlot(t, 1, 0))
+	}
+	action(t, s, a, Action{Kind: "send_room", RoomID: room})
+	mustSync(t, s, a, titleSlot(t, 2, 'x'))
+	assertQueued(t, s, a, 2)
+	mustSync(t, s, a, titleSlot(t, 2, 'x'))
+	assertQueued(t, s, a, 2)
 }
 
 func TestWebCredentialReset(t *testing.T) {

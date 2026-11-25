@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -176,6 +177,73 @@ func send(t *testing.T, f *httptest.Server, r *http.Request, status int) ([]byte
 		t.Fatalf("%s %s: got %d, expected %d: %.500s", r.Method, r.URL.Path, res.StatusCode, status, b)
 	}
 	return b, res
+}
+
+func TestQueuedStatsAPI(t *testing.T) {
+	s, a, b := setup(t)
+	f, origin := edge(t, s, false)
+	send(t, f, request(t, f, "GET", "/v1/stats", "", "", "", nil), http.StatusUnauthorized)
+	send(t, f, request(t, f, "POST", "/v1/stats", "", "", a.Token, nil), http.StatusMethodNotAllowed)
+	send(t, f, request(t, f, "GET", "/v1/stats", "", "", strings.Repeat("0", 64), nil), http.StatusUnauthorized)
+	body, _ := send(t, f, request(t, f, "GET", "/v1/stats", "", "", a.Token, nil), http.StatusOK)
+	if string(body) != "{\"queued_total\":0,\"public_enabled\":true,\"public_outboxes\":[]}\n" {
+		t.Fatalf("empty stats response: %s", body)
+	}
+	pa, err := s.Bearer(t.Context(), a.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, err := s.Bearer(t.Context(), b.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot := fixture()
+	stats, ok := wire.ValidateSlot(slot, 0x20800)
+	if !ok {
+		t.Fatal("invalid fixture")
+	}
+	title := wire.Title{ID: 0x20800, Mode: 0, FreeCount: 10, FreeBytes: 4096, MaxMessage: 4096, MaxBatch: 10, Slot: slot, Stats: stats}
+	if _, err := s.Sync(t.Context(), pa, []wire.Title{title}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Sync(t.Context(), pb, []wire.Title{title}); err != nil {
+		t.Fatal(err)
+	}
+	body, response := send(t, f, request(t, f, "GET", "/v1/stats", "", "", a.Token, nil), http.StatusOK)
+	if string(body) != "{\"queued_total\":1,\"public_enabled\":true,\"public_outboxes\":[{\"title\":133120,\"messages\":1}]}\n" || response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("stats response: %s", body)
+	}
+	body, _ = send(t, f, request(t, f, "GET", "/v1/social", "", "", a.Token, nil), http.StatusOK)
+	var social struct {
+		Me map[string]json.RawMessage `json:"me"`
+	}
+	if err := json.Unmarshal(body, &social); err != nil || len(social.Me) != 6 || social.Me["queued_total"] != nil {
+		t.Fatalf("social me contract changed: %s (%v)", body, err)
+	}
+	_, login := send(t, f, request(t, f, "POST", "/login", formType, origin, "", []byte(url.Values{"username": {a.Username}, "password": {a.Password}}.Encode())), http.StatusSeeOther)
+	r := request(t, f, "GET", "/me", "", "", "", nil)
+	r.AddCookie(login.Cookies()[0])
+	body, _ = send(t, f, r, http.StatusOK)
+	if !strings.Contains(string(body), "Queued since upgrade: 1") || !strings.Contains(string(body), "not necessarily received") ||
+		!strings.Contains(string(body), "CEC ID <code>00020800</code>") || !strings.Contains(string(body), "may not have been matched or delivered") {
+		t.Fatalf("missing account statistics: %s", body)
+	}
+	r = request(t, f, "GET", "/v1/stats", "", "", "", nil)
+	r.AddCookie(login.Cookies()[0])
+	send(t, f, r, http.StatusUnauthorized)
+	if err := s.Act(t.Context(), pa, store.Action{Kind: "public_set", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ = send(t, f, request(t, f, "GET", "/v1/stats", "", "", a.Token, nil), http.StatusOK)
+	if string(body) != "{\"queued_total\":1,\"public_enabled\":false,\"public_outboxes\":[]}\n" {
+		t.Fatalf("private stats response: %s", body)
+	}
+	r = request(t, f, "GET", "/me", "", "", "", nil)
+	r.AddCookie(login.Cookies()[0])
+	body, _ = send(t, f, r, http.StatusOK)
+	if !strings.Contains(string(body), "Public lobby is disabled; no public outboxes are staged") || strings.Contains(string(body), "CEC ID <code>00020800</code>") {
+		t.Fatalf("private account outboxes: %s", body)
+	}
 }
 
 func TestAdminTestDelivery(t *testing.T) {

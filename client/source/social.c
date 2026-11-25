@@ -204,6 +204,41 @@ static json_t *load_model(Http *http) {
     return model;
 }
 
+bool social_stats(Http *http, SocialStats *result) {
+    char body[2048];
+    size_t received;
+    long status;
+    CURLcode err = http_request(http, "/v1/stats", NULL, NULL, 0,
+                                body, sizeof(body), &received, &status);
+    if (err != CURLE_OK || status != 200) return false;
+    json_t *stats = json_loadb(body, received, JSON_REJECT_DUPLICATES, NULL);
+    json_t *outboxes = json_object_get(stats, "public_outboxes");
+    bool valid = object_size(stats, 3) && count_field(stats, "queued_total") &&
+                 bool_field(stats, "public_enabled") && json_is_array(outboxes) &&
+                 json_array_size(outboxes) <= SOCIAL_PUBLIC_OUTBOX_MAX;
+    SocialStats parsed = {0};
+    if (valid) {
+        parsed.queued_total = number(stats, "queued_total");
+        parsed.public_enabled = flag(stats, "public_enabled");
+        parsed.public_count = json_array_size(outboxes);
+        if (!parsed.public_enabled && parsed.public_count) valid = false;
+        for (size_t i = 0; valid && i < parsed.public_count; ++i) {
+            json_t *entry = json_array_get(outboxes, i);
+            if (!object_size(entry, 2) || !count_field(entry, "title") ||
+                number(entry, "title") > UINT32_MAX || !count_field(entry, "messages") ||
+                number(entry, "messages") == 0) {
+                valid = false;
+                break;
+            }
+            parsed.public_titles[i] = (uint32_t)number(entry, "title");
+            if (i && parsed.public_titles[i] <= parsed.public_titles[i - 1]) valid = false;
+        }
+    }
+    if (valid) *result = parsed;
+    json_decref(stats);
+    return valid;
+}
+
 static bool post(Http *http, const char *format, ...) __attribute__((format(printf, 2, 3)));
 static bool post(Http *http, const char *format, ...) {
     char form[128]; // Largest: action=room_create&name= plus 32 escaped octets.
@@ -370,13 +405,22 @@ static const char *send_state(json_t *send) {
     return "Blocked";
 }
 
-static void build_privacy(Menu *m, json_t *me) {
+static void build_privacy(Menu *m, json_t *me, bool have_stats, const SocialStats *stats) {
     m->title = "Privacy";
     bool public = flag(me, "public_enabled");
     detail(m, "Public: %s  (%" PRId64 "/5 used in 24h)\n"
-              "Waiting inbox: %" PRId64 " (received via Sync)\n\n"
-              "Public Off stops random exchange both ways.\n",
+              "Waiting inbox: %" PRId64 " (received via Sync)\n",
               on_off(public), number(me, "public_used"), number(me, "pending_inbox"));
+    if (have_stats) {
+        detail(m, "Queued for others since upgrade: %" PRId64 "\n", stats->queued_total);
+        if (!stats->public_enabled) detail(m, "Public lobby staging: Off\n");
+        else detail(m, "Public lobby staged slots: %u\n", (unsigned)stats->public_count);
+        detail(m, "Staged: waiting for a match, not received.\n");
+    } else {
+        detail(m, "Queue total and public staging unavailable.\n");
+    }
+    detail(m, "Queued does not mean received.\n\n"
+              "Public Off stops random exchange both ways.\n");
     choice(m, SET_PUBLIC, !public, "Turn public %s", on_off(!public));
 }
 
@@ -505,7 +549,7 @@ static void build_send(Menu *m, json_t *s) {
     if (state_is(s, "waiting_sync")) choice(m, CANCEL_SEND, 0, "Cancel request");
 }
 
-static bool build_menu(Menu *m, View v, json_t *data) {
+static bool build_menu(Menu *m, View v, json_t *data, bool have_stats, const SocialStats *stats) {
     json_t *me = json_object_get(data, "me");
     json_t *friends = json_object_get(data, "friends");
     json_t *rooms = json_object_get(data, "rooms");
@@ -513,7 +557,7 @@ static bool build_menu(Menu *m, View v, json_t *data) {
     int64_t my_id = number(me, "id");
     json_t *entry, *room;
     switch (v.screen) {
-    case SCREEN_PRIVACY: build_privacy(m, me); return true;
+    case SCREEN_PRIVACY: build_privacy(m, me, have_stats, stats); return true;
     case SCREEN_FRIENDS: build_friends(m, me, friends); return true;
     case SCREEN_FRIEND:
         entry = find(friends, v.item_id);
@@ -651,18 +695,21 @@ void social_open(Http *http, SocialPage page) {
     View v = {.screen = start[page]};
     json_t *data = NULL;
     bool refresh = true;
+    bool have_stats = false;
+    SocialStats stats = {0};
     while (ui_running() && v.screen != SCREEN_EXIT) {
         if (refresh) {
             json_decref(data);
             data = load_model(http);
             if (!data) break;
+            if (v.screen == SCREEN_PRIVACY) have_stats = social_stats(http, &stats);
             refresh = false;
         }
         Menu m;
         m.details[0] = '\0';
         m.details_len = 0;
         m.count = 0;
-        if (!build_menu(&m, v, data)) {
+        if (!build_menu(&m, v, data, have_stats, &stats)) {
             ui_message("That target is no longer available.");
             go_back(&v);
             continue;

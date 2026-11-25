@@ -63,11 +63,44 @@ func TestMigrateExistingRelay(t *testing.T) {
 		t.Fatalf("legacy login: %v", err)
 	}
 	var version int
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 6 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 7 {
 		t.Fatalf("migration version = %d (%v)", version, err)
 	}
 	var obsolete int
 	if err := s.db.QueryRow("SELECT count(*) FROM pragma_table_info('participants') WHERE name='test_enabled'").Scan(&obsolete); err != nil || obsolete != 0 {
 		t.Fatalf("obsolete column remains: %d %v", obsolete, err)
+	}
+}
+
+func TestMigrateV6QueuedBaseline(t *testing.T) {
+	s, now, path := newTestStore(t)
+	a, creds := testPeer(t, s, "sender")
+	b, _ := testPeer(t, s, "recipient")
+	slot := titleSlot(t, 2, 'x')
+	if err := s.mutate(t.Context(), func(tx *sql.Tx, at int64) error {
+		_, err := putDelivery(t.Context(), tx, a.ID, b.ID, mii, slot.Slot, slot.Stats, "friend", 0, at)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`ALTER TABLE participants DROP COLUMN queued_total; PRAGMA user_version=6`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path, func() time.Time { return *now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a, err = s.Bearer(t.Context(), creds.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertQueued(t, s, a, 0)
+	var count int
+	if err := s.db.QueryRow("SELECT count(*) FROM deliveries").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("legacy delivery lost: %d %v", count, err)
 	}
 }
