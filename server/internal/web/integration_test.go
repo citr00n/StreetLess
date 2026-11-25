@@ -3,7 +3,6 @@ package web
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"io"
@@ -21,8 +20,6 @@ import (
 	"streetless/internal/store"
 	"streetless/internal/wire"
 )
-
-var testAdmin = strings.Repeat("a", 64)
 
 func fixture() []byte {
 	const title = 0x20800
@@ -107,7 +104,7 @@ func edge(t *testing.T, s *store.Store, proxy bool) (*httptest.Server, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Origin: "https://" + authority, Host: host, Port: num, IPv4: "127.0.0.1", AdminHash: sha256.Sum256([]byte(testAdmin))}
+	cfg := Config{Origin: "https://" + authority, Host: host, Port: num, IPv4: "127.0.0.1"}
 	app = New(s, cfg)
 	if proxy {
 		backend := httptest.NewServer(app)
@@ -138,7 +135,7 @@ func debugEdge(t *testing.T, s *store.Store) (*httptest.Server, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Origin: "http://" + authority, Host: host, Port: num, IPv4: "127.0.0.1", AdminHash: sha256.Sum256([]byte(testAdmin)), Debug: true, DebugPIN: "0123"}
+	cfg := Config{Origin: "http://" + authority, Host: host, Port: num, IPv4: "127.0.0.1", Debug: true, DebugPIN: "0123"}
 	app = New(s, cfg)
 	front.Start()
 	t.Cleanup(front.Close)
@@ -184,7 +181,7 @@ func send(t *testing.T, f *httptest.Server, r *http.Request, status int) ([]byte
 func TestAdminTestDelivery(t *testing.T) {
 	s, a, b := setup(t)
 	f, origin := debugEdge(t, s)
-	_, login := send(t, f, request(t, f, "POST", "/login", "application/x-www-form-urlencoded", origin, "", []byte(url.Values{"username": {"admin"}, "password": {testAdmin}}.Encode())), 303)
+	_, login := send(t, f, request(t, f, "POST", "/login", "application/x-www-form-urlencoded", origin, "", []byte(url.Values{"username": {a.Username}, "password": {a.Password}}.Encode())), 303)
 	adminCookie := login.Cookies()[0]
 	payload := fixture()
 	upload := func(origin string, auth bool, p []byte, status int) {

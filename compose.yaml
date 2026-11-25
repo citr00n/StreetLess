@@ -15,7 +15,6 @@ services:
       STREETLESS_PUBLIC_IPV4: "${STREETLESS_PUBLIC_IPV4:?Set the public IPv4 address}"
       STREETLESS_TRANSPORT: direct
       STREETLESS_LISTEN: 0.0.0.0:8443
-      STREETLESS_ADMIN_HASH_FILE: /data/admin.sha256
       STREETLESS_TLS_CERT: /tls/fullchain.pem
       STREETLESS_TLS_KEY: /tls/privkey.pem
     volumes:

@@ -1,7 +1,6 @@
 package web
 
 import (
-	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -30,7 +29,7 @@ func TestApprovalModeHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	origin := "https://" + f.Listener.Addr().String()
-	handler = New(s, Config{Origin: origin, Host: host, Port: pn, IPv4: "127.0.0.1", AdminHash: sha256.Sum256([]byte(testAdmin))})
+	handler = New(s, Config{Origin: origin, Host: host, Port: pn, IPv4: "127.0.0.1"})
 	f.StartTLS()
 	defer f.Close()
 	f.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -46,7 +45,8 @@ func TestApprovalModeHTTP(t *testing.T) {
 		}
 		return send(t, f, r, want)
 	}
-	_, adminLogin := do("/login", url.Values{"username": {"admin"}, "password": {testAdmin}}, nil, false, 303)
+	do("/register", url.Values{"label": {"First"}, "username": {"first"}, "password": {"sailboat"}}, nil, false, 303)
+	_, adminLogin := do("/login", url.Values{"username": {"first"}, "password": {"sailboat"}}, nil, false, 303)
 	adminCookie = adminLogin.Cookies()[0]
 	do("/register", url.Values{"label": {"Pending"}, "username": {"pending_http"}, "password": {"long secure password"}}, nil, false, 303)
 	_, login := do("/login", url.Values{"username": {"pending_http"}, "password": {"long secure password"}}, nil, false, 303)
@@ -62,8 +62,11 @@ func TestApprovalModeHTTP(t *testing.T) {
 	if err != nil || len(accounts) != 1 {
 		t.Fatalf("pending accounts: %+v, %v", accounts, err)
 	}
+	grant := "/admin/participants/" + strconv.FormatInt(accounts[0].ID, 10) + "/grant-admin"
+	do(grant, url.Values{"confirm": {"yes"}}, nil, true, 409)
 	approve := "/admin/participants/" + strconv.FormatInt(accounts[0].ID, 10) + "/approve"
 	do(approve, url.Values{"confirm": {"yes"}}, nil, false, 303)
 	do(approve, url.Values{"confirm": {"yes"}}, nil, true, 303)
+	do(grant, url.Values{"confirm": {"yes"}}, nil, true, 303)
 	do("/me/pair/new", url.Values{}, cookie, false, 200)
 }

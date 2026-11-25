@@ -34,13 +34,14 @@ func TestAdminSessionsAndRegistrationSettings(t *testing.T) {
 	if mode, err := s.Registration(t.Context()); err != nil || mode != "open" {
 		t.Fatalf("default mode %q: %v", mode, err)
 	}
+	post("/register", url.Values{"label": {"First"}, "username": {"first"}, "password": {"sailboat"}}, nil, origin, 303)
+	admin := post("/login", url.Values{"username": {"first"}, "password": {"sailboat"}}, nil, origin, 303).Cookies()[0]
 	post("/register", url.Values{"label": {"Player"}, "username": {"player"}, "password": {"sailboat"}}, nil, origin, 303)
 	user := post("/login", url.Values{"username": {"player"}, "password": {"sailboat"}}, nil, origin, 303).Cookies()[0]
 	post("/admin/settings", url.Values{"registration": {"approval"}}, user, origin, 403)
 	r := request(t, f, "GET", "/admin", "", "", "", nil)
-	r.SetBasicAuth("admin", testAdmin)
+	r.SetBasicAuth("first", "sailboat")
 	send(t, f, r, 303)
-	admin := post("/login", url.Values{"username": {"admin"}, "password": {testAdmin}}, nil, origin, 303).Cookies()[0]
 	if !admin.Secure || !admin.HttpOnly || admin.MaxAge != 86400 || admin.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("cookie: %+v", admin)
 	}
@@ -48,8 +49,8 @@ func TestAdminSessionsAndRegistrationSettings(t *testing.T) {
 	post("/admin/settings", url.Values{"registration": {"invalid"}}, admin, origin, 400)
 	post("/admin/settings", url.Values{"registration": {"approval"}}, admin, origin, 303)
 	post("/register", url.Values{"label": {"Pending"}, "username": {"pending"}, "password": {"sailboat"}}, nil, origin, 303)
-	post("/admin/participants/1/credentials", url.Values{"username": {"player_new"}, "password": {"sunshine lake"}, "confirm": {"yes"}}, user, origin, 403)
-	post("/admin/participants/1/credentials", url.Values{"username": {"player_new"}, "password": {"sunshine lake"}, "confirm": {"yes"}}, admin, origin, 303)
+	post("/admin/participants/2/credentials", url.Values{"username": {"player_new"}, "password": {"sunshine lake"}, "confirm": {"yes"}}, user, origin, 403)
+	post("/admin/participants/2/credentials", url.Values{"username": {"player_new"}, "password": {"sunshine lake"}, "confirm": {"yes"}}, admin, origin, 303)
 	if _, err := s.Session(t.Context(), user.Value); err != store.ErrUnauthorized {
 		t.Fatalf("credential reset retained old session: %v", err)
 	}
@@ -96,11 +97,14 @@ func TestAdminIsAlsoParticipant(t *testing.T) {
 		}
 		return response.Cookies()[0]
 	}
+	if err := s.Register(t.Context(), "First", "first", "sailboat"); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Register(t.Context(), "Player", "player", "sailboat"); err != nil {
 		t.Fatal(err)
 	}
 	user := login("player", "sailboat")
-	admin := login("admin", testAdmin)
+	admin := login("first", "sailboat")
 	get := func(path string, cookie *http.Cookie, status int) []byte {
 		r := request(t, f, "GET", path, "", "", "", nil)
 		r.AddCookie(cookie)
@@ -115,6 +119,25 @@ func TestAdminIsAlsoParticipant(t *testing.T) {
 	}
 	get("/admin", user, 403)
 	get("/admin", admin, 200)
+	if !bytes.Contains(get("/admin", admin, 200), []byte(`/admin/participants/2/grant-admin`)) {
+		t.Fatal("grant administrator control missing")
+	}
+	grant := func(cookie *http.Cookie, origin string, values url.Values, status int) {
+		r := request(t, f, "POST", "/admin/participants/2/grant-admin", "application/x-www-form-urlencoded", origin, "", []byte(values.Encode()))
+		r.AddCookie(cookie)
+		send(t, f, r, status)
+	}
+	confirm := url.Values{"confirm": {"yes"}}
+	grant(user, origin, confirm, 403)
+	grant(admin, "https://wrong.test", confirm, 403)
+	grant(admin, origin, url.Values{}, 400)
+	get("/admin", user, 403)
+	grant(admin, origin, confirm, 303)
+	grant(admin, origin, confirm, 303)
+	get("/admin", user, 200)
+	if !bytes.Contains(get("/me", user, 200), []byte(`href="/admin"`)) {
+		t.Fatal("granted role not reflected in existing session")
+	}
 	r := request(t, f, "POST", "/me/pair/new", "application/x-www-form-urlencoded", origin, "", nil)
 	r.AddCookie(admin)
 	body, _ := send(t, f, r, 200)
@@ -128,7 +151,7 @@ func TestAdminIsAlsoParticipant(t *testing.T) {
 	send(t, f, request(t, f, "POST", "/v1/sync", wire.Binary, "", token, syncRequest()), 200)
 }
 
-func TestPasswordPolicyAndReservedAdmin(t *testing.T) {
+func TestPasswordPolicyAndAdminUsername(t *testing.T) {
 	s, err := store.Open(filepath.Join(t.TempDir(), "relay.sqlite"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +164,5 @@ func TestPasswordPolicyAndReservedAdmin(t *testing.T) {
 		}
 	}
 	values := url.Values{"label": {"Player"}, "username": {"AdMiN"}, "password": {"sailboat"}}
-	send(t, f, request(t, f, "POST", "/register", "application/x-www-form-urlencoded", origin, "", []byte(values.Encode())), 409)
-	values.Set("username", "player")
 	send(t, f, request(t, f, "POST", "/register", "application/x-www-form-urlencoded", origin, "", []byte(values.Encode())), 303)
 }

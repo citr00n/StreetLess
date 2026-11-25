@@ -2,12 +2,9 @@ package web
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -57,7 +54,7 @@ func TestDebugHandshakeAndProductionIsolation(t *testing.T) {
 func TestDebugHTTPRegistrationLoginAndCSRF(t *testing.T) {
 	db, _, _ := setup(t)
 	origin := "http://relay.test:8080"
-	h := New(db, Config{Origin: origin, Host: "relay.test", Port: 8080, Debug: true, DebugPIN: "0123", AdminHash: sha256.Sum256([]byte(testAdmin))})
+	h := New(db, Config{Origin: origin, Host: "relay.test", Port: 8080, Debug: true, DebugPIN: "0123"})
 	post := func(path, from string, values url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest("POST", origin+path, strings.NewReader(values.Encode()))
@@ -98,15 +95,10 @@ func TestDebugHTTPRegistrationLoginAndCSRF(t *testing.T) {
 }
 
 func TestDebugConfigurationFailClosed(t *testing.T) {
-	hash := filepath.Join(t.TempDir(), "admin.sha256")
-	if err := os.WriteFile(hash, []byte(strings.Repeat("a", 64)), 0600); err != nil {
-		t.Fatal(err)
-	}
 	values := map[string]string{
-		"STREETLESS_DEBUG":           "1",
-		"STREETLESS_ORIGIN":          "http://192.168.1.10:8080",
-		"STREETLESS_PUBLIC_IPV4":     "192.168.1.10",
-		"STREETLESS_ADMIN_HASH_FILE": hash,
+		"STREETLESS_DEBUG":       "1",
+		"STREETLESS_ORIGIN":      "http://192.168.1.10:8080",
+		"STREETLESS_PUBLIC_IPV4": "192.168.1.10",
 	}
 	getenv := func(key string) string { return values[key] }
 	cfg, err := LoadConfig(getenv)

@@ -71,4 +71,3 @@ func TestMigrateExistingRelay(t *testing.T) {
 		t.Fatalf("obsolete column remains: %d %v", obsolete, err)
 	}
 }
-

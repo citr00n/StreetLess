@@ -17,12 +17,12 @@ type AdminView struct {
 }
 
 type AdminParticipant struct {
-	ID                    int64
-	Label                 string
-	Active, PublicEnabled bool
+	ID                            int64
+	Label                         string
+	Active, PublicEnabled         bool
 	Registered, Approved, IsAdmin bool
-	CreatedAt             time.Time
-	LastSync              *time.Time
+	CreatedAt                     time.Time
+	LastSync                      *time.Time
 }
 
 type AdminRoom struct {

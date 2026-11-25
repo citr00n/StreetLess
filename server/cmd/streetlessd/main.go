@@ -26,6 +26,9 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) == 3 && os.Args[1] == "--bootstrap-admin" {
+		return bootstrapAdmin(os.Args[2])
+	}
 	debugFlag := false
 	for _, arg := range os.Args[1:] {
 		if arg != "--debug" {
@@ -133,5 +136,28 @@ func run() error {
 			return errors.New("HTTP listener stopped unexpectedly")
 		}
 	}
+	return nil
+}
+
+// bootstrapAdmin is an offline, operator-authorized recovery for databases
+// created before participant accounts could have administrator roles.
+func bootstrapAdmin(username string) error {
+	path := os.Getenv("STREETLESS_DB")
+	if path == "" {
+		path = "streetless.sqlite"
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("STREETLESS_DB must refer to an existing database")
+	}
+	db, err := store.Open(path, nil)
+	if err != nil {
+		return errors.New("invalid or unavailable STREETLESS_DB (check schema, path and permissions)")
+	}
+	defer db.Close()
+	if err := db.BootstrapAdmin(context.Background(), username); err != nil {
+		return fmt.Errorf("could not bootstrap administrator: %w", err)
+	}
+	log.Printf("Administrator role granted to %q", username)
 	return nil
 }

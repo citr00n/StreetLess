@@ -2,8 +2,6 @@ package web
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"fmt"
 	"html/template"
@@ -127,13 +125,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 				if !s.limits.allow(r, "login", 10, 200) || !s.passwordSlot() {
 					status = http.StatusTooManyRequests
 				} else {
-					username, password := form.Get("username"), form.Get("password")
-					digest := sha256.Sum256([]byte(password))
-					if strings.EqualFold(username, "admin") && subtle.ConstantTimeCompare(digest[:], s.cfg.AdminHash[:]) == 1 {
-						cookie, err = s.db.LoginAdmin(r.Context(), s.browserToken(r))
-					} else {
-						cookie, err = s.db.LoginPassword(r.Context(), username, password, s.browserToken(r))
-					}
+					cookie, err = s.db.LoginPassword(r.Context(), form.Get("username"), form.Get("password"), s.browserToken(r))
 					<-s.passwordSlots
 				}
 			default:

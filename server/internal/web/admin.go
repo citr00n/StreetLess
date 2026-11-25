@@ -173,6 +173,10 @@ func (s *server) adminRevoke(w http.ResponseWriter, r *http.Request) {
 	s.adminMutation(w, r, s.db.Revoke)
 }
 
+func (s *server) adminGrant(w http.ResponseWriter, r *http.Request) {
+	s.adminMutation(w, r, s.db.GrantAdmin)
+}
+
 func (s *server) adminClose(w http.ResponseWriter, r *http.Request) {
 	s.adminMutation(w, r, s.db.AdminCloseRoom)
 }

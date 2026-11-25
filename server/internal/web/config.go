@@ -1,12 +1,9 @@
 package web
 
 import (
-	"encoding/hex"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
-	"os"
 	"strconv"
 	"strings"
 )
@@ -14,7 +11,6 @@ import (
 type Config struct {
 	Origin, Host, IPv4                       string
 	Port                                     int
-	AdminHash                                [32]byte
 	Transport, Listen, DB, CertFile, KeyFile string
 	Debug                                    bool
 	DebugPIN                                 string
@@ -99,20 +95,6 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	c.DB = getenv("STREETLESS_DB")
 	if c.DB == "" {
 		c.DB = "streetless.sqlite"
-	}
-	file, err := os.Open(getenv("STREETLESS_ADMIN_HASH_FILE"))
-	if err != nil {
-		return invalid("STREETLESS_ADMIN_HASH_FILE")
-	}
-	defer file.Close()
-	// The hash record is 64 hex bytes and at most one trailing LF.
-	var buf [66]byte
-	n, err := io.ReadFull(file, buf[:])
-	if err != io.ErrUnexpectedEOF || (n != 64 && (n != 65 || buf[64] != '\n')) {
-		return invalid("STREETLESS_ADMIN_HASH_FILE")
-	}
-	if _, err = hex.Decode(c.AdminHash[:], buf[:64]); err != nil {
-		return invalid("STREETLESS_ADMIN_HASH_FILE")
 	}
 	return c, nil
 }

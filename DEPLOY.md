@@ -9,23 +9,30 @@ For client installation, development, and the isolated HTTP debug mode, see the 
 - Docker; Docker Compose for the Compose example.
 - A hostname pointing to the relay's public IPv4 address and an open public TCP port.
 - A TLS certificate for that hostname, its full chain, and its private key. The default 3DS client trusts **ISRG Root X1**; use a compatible chain or build the client and background module with your own trusted CA.
-- OpenSSL for the administrator credential below.
 
-Keep the SQLite database, administrator password and hash, and TLS private key outside the repository. The relay operator can access native slot data; run a relay only for participants who trust the operator.
+Keep the SQLite database and TLS private key outside the repository. The relay operator can access native slot data; run a relay only for participants who trust the operator.
 
-## Administrator credentials
+## Administrator setup
 
-Create the password and its SHA-256 hash once. Store the password securely; it is used at `/login` with username `admin`.
+The first successfully registered account on a new, empty database becomes an administrator and is immediately approved, even when registration requires approval. **Any first visitor can claim a fresh server:** restrict network access to trusted operators until you have registered your own account, then expose the service. Sign in with that account at `/login` and open `/admin`. An administrator can grant administrator rights to other active, approved accounts from the dashboard. Administrator roles cannot currently be removed, and administrator accounts cannot be revoked; grant this access only to trusted people.
+
+Existing databases with registered accounts do not automatically promote anyone. With the normal service stopped, an operator must bootstrap an active, approved registered account locally, before normal operation. This is available only if no administrator has ever been assigned. Existing accounts and data are retained; obsolete special-administrator sessions are invalidated, and the synthetic legacy administrator is never promoted. A database with existing registered accounts, including revoked accounts, does not qualify for first-registration bootstrap.
+
+For a local binary, set `STREETLESS_DB` to the existing database and run:
 
 ```sh
-umask 077
-mkdir -p "$HOME/.local/share/streetless"
-ADMIN_PASSWORD=$(openssl rand -hex 32)
-printf '%s\n' "$ADMIN_PASSWORD" > "$HOME/.local/share/streetless/admin-password.txt"
-printf '%s' "$ADMIN_PASSWORD" | openssl dgst -sha256 -r | cut -d ' ' -f1 \
-  > "$HOME/.local/share/streetless/admin.sha256"
-unset ADMIN_PASSWORD
+STREETLESS_DB=/absolute/path/to/streetless.sqlite streetlessd --bootstrap-admin USERNAME
 ```
+
+For the Docker image, stop the normal container and mount the same data directory; replace `USERNAME` with the selected account's username:
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$STREETLESS_DATA,dst=/data" \
+  streetless:local --bootstrap-admin USERNAME
+```
+
+The image defaults `STREETLESS_DB` to `/data/streetless.sqlite`; if the existing database uses another path, pass the matching `-e STREETLESS_DB=/data/...`. Restart the normal service afterward and sign in with that account.
 
 Registration is open by default. An administrator can switch to approval-required registration in the dashboard; the setting is stored in the database.
 
@@ -42,13 +49,12 @@ export STREETLESS_DATA="$HOME/.local/share/streetless"
 
 `STREETLESS_ORIGIN` is the public origin, not the backend listener: use `https://<hostname>[:port]` with no path or trailing slash. Include a non-default port, but omit an explicit `:443`. `STREETLESS_PUBLIC_IPV4` must be reachable from the 3DS; it is included in pairing details. Open the corresponding TCP port in both the host and provider firewalls.
 
-The examples run the container with the host user's numeric UID/GID, so the bind-mounted data directory and credentials must be accessible to that user. Do not make private keys publicly readable. The image runs as a non-root user by default and needs a persistent, writable `/data` mount.
+The examples run the container with the host user's numeric UID/GID, so the bind-mounted data directory and TLS files must be accessible to that user. Create the data directory first, for example with `mkdir -p "$STREETLESS_DATA"`. Do not make private keys publicly readable. The image runs as a non-root user by default and needs a persistent, writable `/data` mount.
 
 | Setting | Purpose |
 | --- | --- |
 | `STREETLESS_ORIGIN` | Public HTTPS origin; required. |
 | `STREETLESS_PUBLIC_IPV4` | Public IPv4 used for console pairing; required. |
-| `STREETLESS_ADMIN_HASH_FILE` | Path to the administrator password hash; required. |
 | `STREETLESS_DB` | SQLite path; defaults to `streetless.sqlite` outside the image and `/data/streetless.sqlite` in the image. |
 | `STREETLESS_TRANSPORT` | `direct` by default, or `proxy` for a same-host reverse proxy. |
 | `STREETLESS_LISTEN` | Listener; defaults to `0.0.0.0:443` in direct mode and `127.0.0.1:8080` in proxy mode. |
@@ -72,7 +78,6 @@ docker run -d --name streetless --restart unless-stopped \
   --mount "type=bind,src=$TLS_KEY,dst=/tls/privkey.pem,readonly" \
   -e STREETLESS_ORIGIN -e STREETLESS_PUBLIC_IPV4 \
   -e STREETLESS_TRANSPORT=direct -e STREETLESS_LISTEN=0.0.0.0:8443 \
-  -e STREETLESS_ADMIN_HASH_FILE=/data/admin.sha256 \
   -e STREETLESS_TLS_CERT=/tls/fullchain.pem -e STREETLESS_TLS_KEY=/tls/privkey.pem \
   streetless:local
 ```
@@ -81,7 +86,7 @@ To publish external port 443 instead, omit `:8443` from `STREETLESS_ORIGIN` and 
 
 ### Docker Compose
 
-The supplied [compose.yaml](compose.yaml) implements direct HTTPS. After setting the common variables and creating the administrator hash, export the host UID, GID and absolute certificate paths:
+The supplied [compose.yaml](compose.yaml) implements direct HTTPS. After setting the common variables, export the host UID, GID and absolute certificate paths:
 
 ```sh
 export STREETLESS_UID="$(id -u)"
@@ -106,7 +111,6 @@ docker run -d --name streetless --restart unless-stopped --network host \
   --mount "type=bind,src=$STREETLESS_DATA,dst=/data" \
   -e STREETLESS_ORIGIN -e STREETLESS_PUBLIC_IPV4 \
   -e STREETLESS_TRANSPORT=proxy -e STREETLESS_LISTEN=127.0.0.1:8080 \
-  -e STREETLESS_ADMIN_HASH_FILE=/data/admin.sha256 \
   streetless:local
 ```
 
@@ -156,6 +160,6 @@ Preserve the public `Host` header, forward the entire site and API without rewri
 - Open `https://streetless.example.org/healthz`, including the port if not 443. A healthy relay returns `ok`.
 - The website is at `/`, participant accounts are at `/me`, and the administrator dashboard is at `/admin` after signing in through `/login`.
 - Inspect startup errors with `docker logs streetless` or `docker compose logs`.
-- Persist and back up the data directory, including SQLite's WAL files, while the server is stopped. Back up TLS and administrator credentials separately and securely.
+- Persist and back up the data directory, including SQLite's WAL files, while the server is stopped. Back up TLS credentials separately and securely.
 - After renewing certificates, restart the container in direct mode; reload the proxy in proxy mode. To change container settings, recreate the container without deleting its data directory.
 - In production, do not enable debug mode. Debug HTTP exposes passwords, pairing codes, console tokens and game data; its four-digit PIN is not transport security. Use a separate database and an isolated test network as described in the [debugging guide](README.md#debugging).

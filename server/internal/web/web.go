@@ -55,6 +55,7 @@ func New(db *store.Store, cfg Config) http.Handler {
 	mux.HandleFunc("/admin/participants/{id}/credentials", only(http.MethodPost, s.admin(s.adminCredentials)))
 	mux.HandleFunc("/admin/participants/{id}/revoke", only(http.MethodPost, s.admin(s.adminRevoke)))
 	mux.HandleFunc("/admin/participants/{id}/approve", only(http.MethodPost, s.admin(s.adminApprove)))
+	mux.HandleFunc("/admin/participants/{id}/grant-admin", only(http.MethodPost, s.admin(s.adminGrant)))
 	mux.HandleFunc("/admin/rooms/{id}/close", only(http.MethodPost, s.admin(s.adminClose)))
 	mux.HandleFunc("/admin/deliveries/{id}/delete", only(http.MethodPost, s.admin(s.adminDelete)))
 	mux.HandleFunc("/admin/test-deliveries", only(http.MethodPost, s.admin(s.adminTestDelivery)))

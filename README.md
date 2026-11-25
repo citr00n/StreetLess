@@ -58,7 +58,7 @@ If the service cannot be stopped or its status is uncertain, power the console o
 
 ## Relay deployment
 
-See [DEPLOY.md](DEPLOY.md) for Docker and Compose setup, direct HTTPS, same-host reverse proxy configuration, administrator credentials, backups and operational settings.
+See [DEPLOY.md](DEPLOY.md) for Docker and Compose setup, direct HTTPS, same-host reverse proxy configuration, administrator setup, backups and operational settings. On a new, empty database, the first successfully registered account becomes an immediately approved administrator. Keep access restricted until a trusted operator has registered: any first visitor can claim administration. Existing databases with registered accounts require offline administrator bootstrap as described in the deployment guide.
 
 ## Development
 
@@ -113,7 +113,7 @@ These Linux binaries can be mounted into the matching devkitPro container:
 docker run --rm --platform linux/amd64 -v "$PWD:/work" \
   -v "$STREETLESS_CIA_TOOLS:/streetless-tools:ro" -w /work \
   devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5 \
-  sh -lc 'dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson python && export PATH="/streetless-tools:$PATH" && make -C client && make -C background'
+  sh -lc 'set -e; command -v python3 >/dev/null || (apt-get update && apt-get install -y --no-install-recommends python3); dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson; export PATH="/streetless-tools:$PATH"; make -C client; make -C background'
 ```
 
 ### Tests
@@ -150,17 +150,15 @@ For a loopback-only relay, from the repository root:
 ```sh
 umask 077
 D=$(mktemp -d)
-openssl rand -hex 32 > "$D/admin-password.txt"
-tr -d '\n' < "$D/admin-password.txt" | openssl dgst -sha256 -r | cut -d ' ' -f1 > "$D/admin.sha256"
 cd server
 env -u STREETLESS_TRANSPORT \
   STREETLESS_DEBUG=1 STREETLESS_ORIGIN=http://localhost:8080 \
   STREETLESS_LISTEN=127.0.0.1:8080 STREETLESS_PUBLIC_IPV4=127.0.0.1 \
-  STREETLESS_ADMIN_HASH_FILE="$D/admin.sha256" STREETLESS_DB="$D/test.sqlite" \
+  STREETLESS_DB="$D/test.sqlite" \
   go run ./cmd/streetlessd
 ```
 
-Open `http://localhost:8080/` on that machine; the admin username is `admin`, with the password in `$D/admin-password.txt`. `--debug` is an alternative to `STREETLESS_DEBUG=1`. The server prints a fresh four-digit PIN on each start. To use a real 3DS, configure a hostname and reachable LAN IPv4 for the isolated test relay.
+Open `http://localhost:8080/` on that machine and register a disposable account; the first registered account becomes administrator. Sign in normally to use `/admin`. `--debug` is an alternative to `STREETLESS_DEBUG=1`. The server prints a fresh four-digit PIN on each start. To use a real 3DS, configure a hostname and reachable LAN IPv4 for the isolated test relay.
 
 On the 3DS, select **Debug mode**, accept the warning, enter the PIN and pair with the debug relay. Select **Debug mode** again and press **A** to enter a new PIN, or **X** to return to production HTTPS. The PIN is memory-only and debug mode resets on exit. A debug client probes the server before sending credentials or game data; production clients do not fall back to HTTP.
 

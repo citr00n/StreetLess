@@ -72,7 +72,6 @@ func (s *Store) SetRegistration(ctx context.Context, mode string) error {
 	return err
 }
 
-
 func normalizeUsername(username string) string {
 	b := []byte(username)
 	for i, c := range b {
