@@ -226,6 +226,9 @@ int sync_run(Http *http, const Config *config) {
         goto cleanup;
     }
     puts("Sending snapshot and receiving passes...");
+#ifndef STREETLESS_BACKGROUND
+    gfxFlushBuffers();
+#endif
     size_t received;
     long status;
     CURLcode curl = http_request(http, "/v1/sync", "application/octet-stream",
@@ -282,6 +285,9 @@ int sync_run(Http *http, const Config *config) {
     }
     IPC("finalising send", cecd_finalise_send(service));
     puts("Applying verified passes on this 3DS...");
+#ifndef STREETLESS_BACKGROUND
+    gfxFlushBuffers();
+#endif
     IPC("starting receive", cecd_start_recv(service));
     for (u32 i = 0; i < native_count; ++i) {
         const SLDelivery *d = accepted[i];
@@ -311,6 +317,10 @@ ipc_fail:
 cleanup:;
 #undef IPC
     Result rollback;
+#ifndef STREETLESS_BACKGROUND
+    puts("Restoring normal StreetPass...");
+    gfxFlushBuffers();
+#endif
     Result restored = cecd_finish(service, &session, &rollback);
     svcCloseHandle(service);
     mbedtls_platform_zeroize(boxes, sizeof(boxes));
@@ -321,46 +331,80 @@ cleanup:;
         report_ipc("could not restore normal StreetPass", restored);
         puts("Restart the console before another Sync.");
     }
-    if (reject_count && !http_cancelled(http)) reject_slots(http, rejects, reject_count);
+    if (reject_count && !http_cancelled(http)) {
 #ifndef STREETLESS_BACKGROUND
-    if (relay_accepted) {
-        if (uploaded_count) {
-            char names[SL_TITLES][64];
-            title_names_resolve(uploaded, uploaded_count, names);
-            puts("Uploaded to relay (not necessarily queued or received):");
-            for (size_t i = 0; i < uploaded_count; ++i) printf("- %s\n", names[i]);
-        } else {
-            puts("Uploaded to relay: no outgoing game slots.");
-        }
-    }
+        puts("Reporting invalid passes to relay...");
+        gfxFlushBuffers();
 #endif
+        reject_slots(http, rejects, reject_count);
+    }
     if (committed) {
         printf("Received %u game slot(s).\n", (unsigned)applied_count);
         if (!applied_count) puts("Wait for other players or make inbox space.");
         else if (R_SUCCEEDED(restored) && !http_cancelled(http)) {
             uint64_t ids[SL_TITLES];
             for (size_t i = 0; i < applied_count; ++i) ids[i] = applied[i]->id;
+#ifndef STREETLESS_BACKGROUND
+            puts("Confirming received passes with relay...");
+            gfxFlushBuffers();
+#endif
             journal_ack(http, ids, applied_count);
         } else puts("Passes are saved locally; ACK deferred.");
     }
 #ifndef STREETLESS_BACKGROUND
-    if (relay_accepted && !http_cancelled(http)) {
-        SocialStats stats;
-        if (social_stats(http, &stats)) {
-            printf("Queued for others since upgrade: %" PRId64 "\n", stats.queued_total);
+    if (relay_accepted) {
+        SocialStats stats = {0};
+        bool have_stats = false;
+        if (!http_cancelled(http)) {
+            puts("Checking relay queue and public lobby...");
+            gfxFlushBuffers();
+            have_stats = social_stats(http, &stats);
+            if (have_stats)
+                printf("Queued for others since upgrade: %" PRId64 "\n", stats.queued_total);
+            else
+                puts("Queue total and public lobby staging unavailable.");
+        } else {
+            puts("Queue total and public lobby staging not checked (cancelled).");
+        }
+
+        uint32_t ids[SL_TITLES + SOCIAL_PUBLIC_OUTBOX_MAX];
+        size_t uploaded_index[SL_TITLES], public_index[SOCIAL_PUBLIC_OUTBOX_MAX];
+        char names[SL_TITLES + SOCIAL_PUBLIC_OUTBOX_MAX][64];
+        size_t count = 0;
+        for (size_t group = 0; group < 2; ++group) {
+            size_t n = group == 0 ? uploaded_count : (have_stats ? stats.public_count : 0);
+            for (size_t i = 0; i < n; ++i) {
+                uint32_t id = group == 0 ? uploaded[i] : stats.public_titles[i];
+                size_t j = 0;
+                while (j < count && ids[j] != id) ++j;
+                if (j == count) ids[count++] = id;
+                if (group == 0) uploaded_index[i] = j;
+                else public_index[i] = j;
+            }
+        }
+        if (count && !http_cancelled(http)) {
+            puts("Resolving game names from installed titles...");
+            gfxFlushBuffers();
+            title_names_resolve(ids, count, names);
+        } else {
+            for (size_t i = 0; i < count; ++i)
+                snprintf(names[i], sizeof(names[i]), "CEC %08lX", (unsigned long)ids[i]);
+        }
+        if (uploaded_count) {
+            puts("Uploaded to relay (not necessarily queued or received):");
+            for (size_t i = 0; i < uploaded_count; ++i) printf("- %s\n", names[uploaded_index[i]]);
+        } else {
+            puts("Uploaded to relay: no outgoing game slots.");
+        }
+        if (have_stats) {
             if (!stats.public_enabled) {
                 puts("Public lobby: Off.");
             } else if (!stats.public_count) {
                 puts("Public lobby: no staged game slots.");
             } else {
-                char names[SOCIAL_PUBLIC_OUTBOX_MAX][64];
-                title_names_resolve(stats.public_titles, stats.public_count, names);
-                puts("Staged in public lobby; waiting for a match,");
-                puts("not necessarily received:");
-                for (size_t i = 0; i < stats.public_count; ++i) printf("- %s\n", names[i]);
+                puts("Staged in public lobby (not necessarily queued or received):");
+                for (size_t i = 0; i < stats.public_count; ++i) printf("- %s\n", names[public_index[i]]);
             }
-        } else {
-            puts("Queue total and public lobby staging unavailable.");
         }
     }
 #endif

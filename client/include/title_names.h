@@ -5,7 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Read-only discovery. Each result is a printable name or an exact CEC ID. */
+/* Read-only discovery for up to 24 IDs in order. Each result is a printable
+ * name or an exact CEC ID when no unambiguous name is available. */
 void title_names_resolve(const uint32_t *ids, size_t count, char (*names)[64]);
 
 /* Parse one complete SMDH icon; false also covers an undisplayable name. */

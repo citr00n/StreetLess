@@ -49,6 +49,8 @@ After a successful manual Sync, the client lists the selected game slots uploade
 
 The public-lobby status lists game slots currently staged for random matching. The console resolves installed game names where possible; the website displays CEC IDs. Staging does not mean another player has received a pass. A match requires another eligible player with a compatible game and available capacity. If the lobby is disabled, the snapshot has expired, or a game has no eligible outgoing slot, that game is not listed. A friends-only native slot is skipped rather than sent.
 
+During manual Sync, the console shows its progress while looking up local game names. Uploaded and public-lobby lists share one lookup. If installed metadata is unavailable or conflicting, the client shows the CEC ID instead of guessing a title.
+
 The client and account page also show the number of outgoing deliveries queued for other players since this counter was introduced. One slot queued to multiple recipients counts once per recipient; administrator test deliveries do not count. The total persists after deliveries are removed, so it is not the current queue size and does not confirm receipt. Existing deliveries from before the upgrade are not included.
 
 ## Background sync

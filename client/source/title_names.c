@@ -4,9 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_REQUESTED_TITLES 12u
+#define MAX_REQUESTED_TITLES 24u
 #define SMDH_SIZE 0x36c0u
 #define SMDH_CEC_OFFSET 0x2034u
+#define SMDH_METADATA_SIZE (SMDH_CEC_OFFSET + 4u)
 #define MAX_INSTALLED_TITLES 4096u
 
 static uint32_t read_le32(const unsigned char *p) {
@@ -40,11 +41,11 @@ static bool short_name(const unsigned char *p, char name[64]) {
     return true;
 }
 
-bool title_names_parse_smdh(const void *data, size_t size, uint32_t id, char name[64]) {
+static bool parse_metadata(const void *data, size_t size, uint32_t id, char name[64]) {
     const unsigned char *p = data;
     if (!name) return false;
     name[0] = '\0';
-    if (!p || size != SMDH_SIZE || memcmp(p, "SMDH", 4) != 0 ||
+    if (!p || size < SMDH_METADATA_SIZE || memcmp(p, "SMDH", 4) != 0 ||
         p[4] != 0 || p[5] != 0 || read_le32(p + SMDH_CEC_OFFSET) != id)
         return false;
     /* English first, then the other documented language slots. */
@@ -55,6 +56,30 @@ bool title_names_parse_smdh(const void *data, size_t size, uint32_t id, char nam
     name[0] = '\0';
     return false;
 }
+
+bool title_names_parse_smdh(const void *data, size_t size, uint32_t id, char name[64]) {
+    if (size != SMDH_SIZE) {
+        if (name) name[0] = '\0';
+        return false;
+    }
+    return parse_metadata(data, size, id, name);
+}
+
+#if defined(__3DS__) || defined(STREETLESS_TITLE_NAMES_TEST)
+/* State is independent of the displayed text: a real title can itself look
+ * like a CEC fallback. Invalid metadata does not count as a candidate. */
+static inline void add_candidate(unsigned char *state, char name[64],
+                                 const char *candidate, uint32_t id) {
+    if (!candidate) return;
+    if (*state == 0) {
+        memcpy(name, candidate, strlen(candidate) + 1);
+        *state = 1;
+    } else if (*state == 1 && strcmp(name, candidate) != 0) {
+        *state = 2;
+        (void)snprintf(name, 64, "CEC %08lX", (unsigned long)id);
+    }
+}
+#endif
 
 static void fallback(uint32_t id, char name[64]) {
     (void)snprintf(name, 64, "CEC %08lX", (unsigned long)id);
@@ -80,7 +105,8 @@ static bool read_icon(FS_MediaType media, uint64_t title, unsigned char *icon) {
     u64 size = 0;
     u32 got = 0;
     bool ok = R_SUCCEEDED(FSFILE_GetSize(file, &size)) && size == SMDH_SIZE &&
-              R_SUCCEEDED(FSFILE_Read(file, &got, 0, icon, SMDH_SIZE)) && got == SMDH_SIZE;
+              R_SUCCEEDED(FSFILE_Read(file, &got, 0, icon, SMDH_METADATA_SIZE)) &&
+              got == SMDH_METADATA_SIZE;
     FSFILE_Close(file);
     return ok;
 }
@@ -91,7 +117,7 @@ void title_names_resolve(const uint32_t *ids, size_t count, char (*names)[64]) {
     for (size_t i = 0; i < count; ++i) fallback(ids[i], names[i]);
 #ifdef __3DS__
     if (!count || count > MAX_REQUESTED_TITLES || R_FAILED(amInit())) return;
-    unsigned char *icon = malloc(SMDH_SIZE);
+    unsigned char *icon = malloc(SMDH_METADATA_SIZE);
     unsigned char *matches = calloc(count, 1);
     if (!icon || !matches) goto done;
     const FS_MediaType media[] = { MEDIATYPE_NAND, MEDIATYPE_SD, MEDIATYPE_GAME_CARD };
@@ -105,16 +131,10 @@ void title_names_resolve(const uint32_t *ids, size_t count, char (*names)[64]) {
             for (u32 t = 0; t < read; ++t) {
                 if (!read_icon(media[m], titles[t], icon) || memcmp(icon, "SMDH", 4)) continue;
                 uint32_t cec = read_le32(icon + SMDH_CEC_OFFSET);
+                char candidate[64];
+                if (!parse_metadata(icon, SMDH_METADATA_SIZE, cec, candidate)) continue;
                 for (size_t i = 0; i < count; ++i) {
-                    if (ids[i] != cec) continue;
-                    char candidate[64];
-                    if (matches[i] != 0 || !title_names_parse_smdh(icon, SMDH_SIZE, cec, candidate)) {
-                        matches[i] = 2;
-                        fallback(ids[i], names[i]);
-                    } else {
-                        matches[i] = 1;
-                        memcpy(names[i], candidate, strlen(candidate) + 1);
-                    }
+                    if (ids[i] == cec) add_candidate(&matches[i], names[i], candidate, ids[i]);
                 }
             }
         }
