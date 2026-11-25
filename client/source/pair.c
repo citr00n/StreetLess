@@ -35,7 +35,7 @@ bool pair_parse(const unsigned char *payload, size_t length, PairData *out) {
     return true;
 }
 
-#if defined(__3DS__) && !defined(STREETLESS_TEST_SLOT_EXPORT)
+#ifdef __3DS__
 #include "http.h"
 #include "ui.h"
 #include "quirc.h"
@@ -53,10 +53,10 @@ bool pair_parse(const unsigned char *payload, size_t length, PairData *out) {
 
 static bool remove_file(const char *path) { return unlink(path) == 0 || errno == ENOENT; }
 
-static bool save_file(const char *tmp, const char *path, const PairData *data, bool pending) {
+static bool save_file(const char *tmp, const char *path, const PairData *data, bool pending, bool debug) {
     FILE *f = fopen(tmp, "wb");
     if (!f) return false;
-    bool ok = (!pending || fprintf(f, "%s\n", data->code) == 33) &&
+    bool ok = (!pending || fprintf(f, "%c:%s\n", debug ? 'D' : 'P', data->code) == 35) &&
         fprintf(f, "host=%s\nipv4=%s\nport=%u\ntoken=%s\n", data->config.host,
             data->config.ipv4, (unsigned)data->config.port, data->config.token) > 0 &&
         fflush(f) == 0 && fsync(fileno(f)) == 0;
@@ -67,15 +67,25 @@ static bool save_file(const char *tmp, const char *path, const PairData *data, b
 }
 
 /* 0 absent, 1 valid, -1 inaccessible or damaged: never overwrite it. */
-static int load_pending(PairData *data) {
+static int load_pending(PairData *data, bool *debug) {
     FILE *f = fopen(PAIR_PATH, "rb");
     if (!f) return errno == ENOENT ? 0 : -1;
-    char line[35];
-    bool ok = fgets(line, sizeof(line), f) && strlen(line) == 33 && line[32] == '\n';
+    char line[38];
+    bool ok = fgets(line, sizeof(line), f) != NULL;
     if (ok) {
-        line[32] = 0;
-        ok = hex_code(line, 32) && config_read(f, &data->config);
-        if (ok) memcpy(data->code, line, 33);
+        char *code = line;
+        if (strlen(line) == 35 && line[1] == ':' && (line[0] == 'D' || line[0] == 'P')) {
+            *debug = line[0] == 'D';
+            code += 2;
+        } else {
+            *debug = false; /* Existing recovery files were always HTTPS. */
+        }
+        ok = strlen(code) == 33 && code[32] == '\n';
+        if (ok) {
+            code[32] = 0;
+            ok = hex_code(code, 32) && config_read(f, &data->config);
+            if (ok) memcpy(data->code, code, 33);
+        }
     }
     if (fclose(f) != 0) ok = false;
     return ok ? 1 : -1;
@@ -89,12 +99,13 @@ static bool keyboard(const char *prompt, char *value, size_t cap) {
     return swkbdInputText(&state, value, cap) == SWKBD_BUTTON_CONFIRM;
 }
 
-static bool manual(PairData *data) {
-    char port[6] = "443", payload[321];
+static bool manual(PairData *data, bool debug) {
+    char port[6], payload[321];
+    snprintf(port, sizeof(port), "%s", debug ? "8080" : "443");
     *data = (PairData){0};
-    if (!keyboard("Server hostname (no https://)", data->config.host, sizeof(data->config.host)) ||
+    if (!keyboard("Server hostname (no scheme)", data->config.host, sizeof(data->config.host)) ||
         !keyboard("Server IPv4 address", data->config.ipv4, sizeof(data->config.ipv4)) ||
-        !keyboard("HTTPS port", port, sizeof(port)) ||
+        !keyboard(debug ? "HTTP port" : "HTTPS port", port, sizeof(port)) ||
         !keyboard("32-character pairing code", data->code, sizeof(data->code))) return false;
     int n = snprintf(payload, sizeof(payload), "streetless1|%s|%s|%s|%s",
         data->config.host, data->config.ipv4, port, data->code);
@@ -186,9 +197,10 @@ static bool generate_token(char token[65]) {
     return true;
 }
 
-bool pair_run(Config *config) {
+bool pair_run(Config *config, const char *debug_pin) {
     PairData data;
-    int pending = load_pending(&data);
+    bool pending_debug = false;
+    int pending = load_pending(&data, &pending_debug);
     if (pending < 0) {
         ui_message("Cannot read pending pairing on SD.\nDo not overwrite it; check the SD card.");
         return false;
@@ -209,13 +221,17 @@ bool pair_run(Config *config) {
             }
             return false;
         }
+        if (pending_debug != (debug_pin != NULL)) {
+            ui_message("Saved pairing belongs to the other mode.\nSwitch modes to retry or discard it.");
+            return false;
+        }
     } else {
         consoleClear();
         puts("Streetless / Pair console\n\nA Scan QR\nY Enter one-time code\nB Cancel   START Exit");
         uint32_t keys;
         do { keys = ui_keys(); } while (keys && !(keys & (KEY_A | KEY_Y | KEY_B)));
         if (!keys || (keys & KEY_B)) return false;
-        if (!((keys & KEY_A) ? scan(&data) : manual(&data))) return false;
+        if (!((keys & KEY_A) ? scan(&data) : manual(&data, debug_pin != NULL))) return false;
         char target[290];
         snprintf(target, sizeof(target), "%s:%u\nIPv4: %s", data.config.host,
             (unsigned)data.config.port, data.config.ipv4);
@@ -224,12 +240,12 @@ bool pair_run(Config *config) {
         if (!generate_token(data.config.token)) { ui_message("Secure random generator unavailable."); return false; }
         if ((mkdir("sdmc:/3ds", 0700) != 0 && errno != EEXIST) ||
             (mkdir("sdmc:/3ds/streetless", 0700) != 0 && errno != EEXIST) ||
-            !save_file(PAIR_TMP, PAIR_PATH, &data, true)) {
+            !save_file(PAIR_TMP, PAIR_PATH, &data, true, debug_pin != NULL)) {
             ui_message("Cannot save pairing recovery state to SD.\nNo request was sent."); return false;
         }
     }
     Http http;
-    if (!http_open(&http, &data.config, "romfs:/certs.pem")) {
+    if (!http_open(&http, &data.config, "romfs:/certs.pem", debug_pin)) {
         ui_message("Cannot initialize networking.\nRetry the saved pairing later."); return false;
     }
     char body[110], response[256];
@@ -245,7 +261,7 @@ bool pair_run(Config *config) {
         ui_message(message);
         return false;
     }
-    if (!save_file(CONFIG_TMP, STREETLESS_CONFIG_PATH, &data, false)) {
+    if (!save_file(CONFIG_TMP, STREETLESS_CONFIG_PATH, &data, false, debug_pin != NULL)) {
         ui_message("Pairing succeeded, but config save failed.\nRetry the saved claim before it expires."); return false;
     }
     *config = data.config;

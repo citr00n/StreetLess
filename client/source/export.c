@@ -1,4 +1,3 @@
-#ifdef STREETLESS_TEST_SLOT_EXPORT
 #include "export.h"
 #include "cecd.h"
 #include <errno.h>
@@ -53,7 +52,7 @@ static void report(const char *phase, Result result) {
     printf("CECD: %s\n(%08lx)\n", phase, (unsigned long)(u32)result);
 }
 
-void export_run(void) {
+bool export_run(void) {
     consoleClear();
     puts("Streetless - diagnostic slot export\n\nChecking local StreetPass outboxes...");
     Handle service;
@@ -62,7 +61,7 @@ void export_run(void) {
         report("cannot access cecd:s", rc);
         puts("Use Luma3DS and current system software.");
         wait_to_exit();
-        return;
+        return true;
     }
     CecExchange session = {0};
     CecSlot metadata[SL_TITLES];
@@ -163,5 +162,5 @@ void export_run(void) {
     }
  done:
     for (u32 i = 0; i < count; ++i) free(valid[i].data);
+    return R_SUCCEEDED(restored);
 }
-#endif

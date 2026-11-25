@@ -1,4 +1,3 @@
-#ifndef STREETLESS_TEST_SLOT_EXPORT
 #include "social.h"
 #include "ui.h"
 
@@ -79,9 +78,9 @@ static bool valid_code(const char *s, size_t len, bool allow_uppercase) {
 
 static bool valid_me(json_t *me) {
     json_t *code = json_object_get(me, "friend_code");
-    return object_size(me, 7) && id_field(me, "id") && label_field(me, "label") &&
+    return object_size(me, 6) && id_field(me, "id") && label_field(me, "label") &&
            valid_code(json_string_value(code), json_string_length(code), false) &&
-           bool_field(me, "public_enabled") && bool_field(me, "test_enabled") &&
+           bool_field(me, "public_enabled") &&
            count_field(me, "public_used") && number(me, "public_used") <= 3 &&
            count_field(me, "pending_inbox");
 }
@@ -273,7 +272,7 @@ typedef enum {
 
 typedef enum {
     SHOW_FRIEND, SHOW_ROOM, SHOW_MEMBER, SHOW_INVITE, SHOW_SEND,
-    SET_PUBLIC, SET_TEST, REQUEST_FRIEND, ACCEPT_FRIEND, REMOVE_FRIEND, SET_FRIEND, SEND_FRIEND,
+    SET_PUBLIC, REQUEST_FRIEND, ACCEPT_FRIEND, REMOVE_FRIEND, SET_FRIEND, SEND_FRIEND,
     CREATE_ROOM, ACCEPT_ROOM, LEAVE_ROOM, CLOSE_ROOM, INVITE_MEMBER, REMOVE_MEMBER, SET_ROOM,
     SEND_ROOM, CANCEL_SEND,
 } Command;
@@ -373,14 +372,12 @@ static const char *send_state(json_t *send) {
 
 static void build_privacy(Menu *m, json_t *me) {
     m->title = "Privacy";
-    bool public = flag(me, "public_enabled"), test = flag(me, "test_enabled");
-    detail(m, "Public: %s  (%" PRId64 "/3 used in 24h)\nAdmin test passes: %s\n"
+    bool public = flag(me, "public_enabled");
+    detail(m, "Public: %s  (%" PRId64 "/3 used in 24h)\n"
               "Waiting inbox: %" PRId64 " (received via Sync)\n\n"
-              "Public Off stops random exchange both ways.\n"
-              "Admin tests are a separate, optional\nexception for diagnostics.\n",
-              on_off(public), number(me, "public_used"), on_off(test), number(me, "pending_inbox"));
+              "Public Off stops random exchange both ways.\n",
+              on_off(public), number(me, "public_used"), number(me, "pending_inbox"));
     choice(m, SET_PUBLIC, !public, "Turn public %s", on_off(!public));
-    choice(m, SET_TEST, !test, "Turn admin tests %s", on_off(!test));
 }
 
 static void build_friends(Menu *m, json_t *me, json_t *friends) {
@@ -586,11 +583,6 @@ static bool select_choice(Http *http, View *v, Choice c, json_t *data) {
             : "Stop random exchange and remove pending\npublic passes in both directions?")) return false;
         post(http, "action=public_set&enabled=%d", (int)c.id);
         break;
-    case SET_TEST:
-        if (!ui_confirm("Admin test passes", NULL, c.id ? "Receive optional test passes sent to you\nby the administrator for diagnostics?"
-            : "Stop receiving admin tests and remove\npending test passes?")) return false;
-        post(http, "action=test_set&enabled=%d", (int)c.id);
-        break;
     case REQUEST_FRIEND:
         if (!input_value("16-digit friend code", true, encoded)) return false;
         post(http, "action=friend_request&code=%s", encoded);
@@ -685,4 +677,3 @@ void social_open(Http *http, SocialPage page) {
     }
     json_decref(data);
 }
-#endif

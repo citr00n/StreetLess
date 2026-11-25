@@ -36,8 +36,8 @@ static bool ipv4(const char *s) {
 }
 
 bool config_endpoint_valid(const Config *config) {
-    return config->port && strlen(config->host) <= 253 &&
-        hostname(config->host) && ipv4(config->ipv4);
+    return config->port && strlen(config->host) <= 253 && ipv4(config->ipv4) &&
+        (hostname(config->host) || (ipv4(config->host) && !strcmp(config->host, config->ipv4)));
 }
 
 static bool line(Config *c, char *s, unsigned *seen) {
@@ -48,7 +48,7 @@ static bool line(Config *c, char *s, unsigned *seen) {
     unsigned key;
     if (!strcmp(s, "host")) {
         key = 1;
-        if (n >= sizeof(c->host) || !hostname(v)) return false;
+        if (n >= sizeof(c->host) || (!hostname(v) && !ipv4(v))) return false;
         memcpy(c->host, v, n + 1);
     } else if (!strcmp(s, "ipv4")) {
         key = 2;
@@ -94,7 +94,7 @@ bool config_read(FILE *input, Config *config) {
             buf[used++] = (char)c;
         }
     }
-    if (ferror(input) || (seen & 7) != 7) return false;
+    if (ferror(input) || (seen & 7) != 7 || !config_endpoint_valid(&parsed)) return false;
     *config = parsed;
     return true;
 }

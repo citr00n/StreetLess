@@ -8,12 +8,15 @@ typedef struct {
     struct curl_slist *resolve;
     char origin[270];
     char authorization[88];
+    bool debug;
+    char debug_header[32];
 #ifdef __3DS__
     void *soc_buffer;
 #endif
 } Http;
 
-bool http_open(Http *http, const Config *config, const char *ca_file);
+bool http_open(Http *http, const Config *config, const char *ca_file, const char *debug_pin);
+bool http_debug_pin_valid(const char *pin);
 void http_close(Http *http);
 // A NULL MIME selects GET; otherwise request is POST. HTTP status is returned
 // separately from transport status, even when the server sends an error body.

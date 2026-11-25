@@ -10,7 +10,7 @@ typedef struct {
 
 /* Parses exactly streetless1|HOST|IPV4|PORT|CODE, without a URL or token. */
 bool pair_parse(const unsigned char *payload, size_t length, PairData *out);
-#if defined(__3DS__) && !defined(STREETLESS_TEST_SLOT_EXPORT)
-bool pair_run(Config *config);
+#ifdef __3DS__
+bool pair_run(Config *config, const char *debug_pin);
 #endif
 #endif

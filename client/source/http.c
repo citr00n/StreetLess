@@ -19,8 +19,17 @@ static size_t receive(char *data, size_t size, size_t count, void *userdata) {
     return n;
 }
 
-bool http_open(Http *h, const Config *c, const char *ca_file) {
+bool http_debug_pin_valid(const char *pin) {
+    return pin && strlen(pin) == 4 && strspn(pin, "0123456789") == 4;
+}
+
+bool http_open(Http *h, const Config *c, const char *ca_file, const char *debug_pin) {
     *h = (Http){0};
+    if (debug_pin && !http_debug_pin_valid(debug_pin)) return false;
+    if (!debug_pin && strspn(c->host, "0123456789.") == strlen(c->host)) return false;
+    h->debug = debug_pin != NULL;
+    if (h->debug) snprintf(h->debug_header, sizeof(h->debug_header),
+        "X-Streetless-Debug-Pin: %s", debug_pin);
 #ifdef __3DS__
     enum { soc_size = 1 << 20 };
     h->soc_buffer = memalign(0x1000, soc_size);
@@ -38,15 +47,17 @@ bool http_open(Http *h, const Config *c, const char *ca_file) {
     snprintf(address, sizeof(address), "%s:%u:%s", c->host, (unsigned)c->port, c->ipv4);
     h->resolve = curl_slist_append(NULL, address);
     if (!h->resolve) goto fail;
-    if (c->port == 443) snprintf(h->origin, sizeof(h->origin), "https://%s", c->host);
-    else snprintf(h->origin, sizeof(h->origin), "https://%s:%u", c->host, (unsigned)c->port);
+    const char *scheme = h->debug ? "http" : "https";
+    unsigned default_port = h->debug ? 80 : 443;
+    if (c->port == default_port) snprintf(h->origin, sizeof(h->origin), "%s://%s", scheme, c->host);
+    else snprintf(h->origin, sizeof(h->origin), "%s://%s:%u", scheme, c->host, (unsigned)c->port);
     snprintf(h->authorization, sizeof(h->authorization), "Authorization: Bearer %s", c->token);
 #define SET(option, value) do { if (curl_easy_setopt(h->easy, option, value) != CURLE_OK) goto fail; } while (0)
     SET(CURLOPT_RESOLVE, h->resolve);
     SET(CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
     SET(CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
     SET(CURLOPT_PROXY, "");
-    SET(CURLOPT_PROTOCOLS_STR, "https");
+    SET(CURLOPT_PROTOCOLS_STR, h->debug ? "http" : "https");
     SET(CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
     SET(CURLOPT_SSL_VERIFYPEER, 1L);
     SET(CURLOPT_SSL_VERIFYHOST, 2L);
@@ -95,6 +106,11 @@ static CURLcode request(Http *h, const char *path, const char *mime,
         headers = curl_slist_append(NULL, h->authorization);
         if (!headers) return CURLE_OUT_OF_MEMORY;
     }
+    if (h->debug) {
+        struct curl_slist *next = curl_slist_append(headers, h->debug_header);
+        if (!next) { curl_slist_free_all(headers); return CURLE_OUT_OF_MEMORY; }
+        headers = next;
+    }
     CURLcode result = CURLE_OUT_OF_MEMORY;
     Buffer out = {response, 0, cap};
     if (mime) {
@@ -123,14 +139,34 @@ done:
     curl_slist_free_all(headers);
     return result;
 }
+static CURLcode probe(Http *h, long *status) {
+    static const char expected[] = "streetless-debug-v1\n";
+    char response[sizeof(expected)];
+    size_t received;
+    CURLcode rc = request(h, "/v1/debug", NULL, NULL, 0, response,
+                          sizeof(response), &received, status, false);
+    if (rc != CURLE_OK) return rc;
+    if (*status != 200 || received != sizeof(expected) - 1 ||
+        memcmp(response, expected, sizeof(expected) - 1)) return CURLE_WEIRD_SERVER_REPLY;
+    return CURLE_OK;
+}
+
 
 CURLcode http_request(Http *h, const char *path, const char *mime,
     const void *body, size_t len, void *response, size_t cap, size_t *received, long *status) {
+    if (h->debug) {
+        CURLcode rc = probe(h, status);
+        if (rc != CURLE_OK) { *received = 0; return rc; }
+    }
     return request(h, path, mime, body, len, response, cap, received, status, true);
 }
 
 CURLcode http_pair(Http *h, const char *body, size_t len,
     void *response, size_t cap, size_t *received, long *status) {
+    if (h->debug) {
+        CURLcode rc = probe(h, status);
+        if (rc != CURLE_OK) { *received = 0; return rc; }
+    }
     return request(h, "/v1/pair", "application/x-www-form-urlencoded",
         body, len, response, cap, received, status, false);
 }
@@ -140,6 +176,7 @@ const char *http_error(CURLcode e) {
     case CURLE_PEER_FAILED_VERIFICATION:
     case CURLE_SSL_CONNECT_ERROR:
     case CURLE_SSL_CACERT_BADFILE: return "TLS verification or handshake failed";
+    case CURLE_WEIRD_SERVER_REPLY: return "Debug probe failed; re-enter server PIN";
     case CURLE_OPERATION_TIMEDOUT: return "Connection timed out";
     case CURLE_COULDNT_CONNECT: return "Cannot connect to Streetless";
     case CURLE_WRITE_ERROR: return "Server response exceeds size limit";

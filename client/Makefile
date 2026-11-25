@@ -8,7 +8,7 @@ APP_TITLE := Streetless
 APP_DESCRIPTION := StreetPass over the Internet
 APP_AUTHOR := Streetless
 export APP_TITLE APP_DESCRIPTION APP_AUTHOR
-export APP_ICON := $(CTRULIB)/default_icon.png
+export APP_ICON := $(CURDIR)/build/artwork/icon.png
 
 CA_FILE ?= romfs/certs.pem
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
@@ -18,26 +18,28 @@ LDFLAGS := $(ARCH) -specs=3dsx.specs -Wl,--gc-sections -L$(PORT)/lib -L$(CTRULIB
 CURL_LIBS = $(shell $(PORT)/bin/curl-config --libs)
 TARGET := streetless
 BUILD := build
-ifeq ($(TEST_SLOT_EXPORT),1)
-TARGET := streetless-slot-export
-BUILD := build/export
-APP_TITLE := Streetless Slot Export
-CFLAGS += -DSTREETLESS_TEST_SLOT_EXPORT
-endif
 OBJECTS := $(patsubst source/%.c,$(BUILD)/%.o,$(wildcard source/*.c))
-ifneq ($(TEST_SLOT_EXPORT),1)
 CFLAGS += -Iquirc
 OBJECTS += $(patsubst quirc/%.c,$(BUILD)/quirc/%.o,$(wildcard quirc/*.c))
-endif
 
 .PHONY: all clean force
-all: $(TARGET).3dsx
+all: $(TARGET).3dsx $(TARGET).cia
 
 $(TARGET).3dsx: $(TARGET).elf $(TARGET).smdh $(BUILD)/romfs/certs.pem
 	3dsxtool $< $@ --smdh=$(TARGET).smdh --romfs=$(BUILD)/romfs
 
-$(TARGET).smdh:
+$(TARGET).smdh: $(BUILD)/artwork/.stamp
 	smdhtool --create "$(APP_TITLE)" "$(APP_DESCRIPTION)" "$(APP_AUTHOR)" "$(APP_ICON)" $@
+
+$(BUILD)/artwork/.stamp: tools/artwork.py
+	python3 tools/artwork.py
+	@touch $@
+
+$(BUILD)/banner.bnr: $(BUILD)/artwork/.stamp
+	bannertool makebanner -i $(BUILD)/artwork/banner.png -a $(BUILD)/artwork/banner.wav -o $@
+
+$(TARGET).cia: $(TARGET).elf $(TARGET).smdh $(BUILD)/banner.bnr $(BUILD)/romfs/certs.pem streetless.rsf
+	makerom -f cia -o $@ -rsf streetless.rsf -target t -exefslogo -elf $(TARGET).elf -icon $(TARGET).smdh -banner $(BUILD)/banner.bnr
 
 $(TARGET).elf: $(OBJECTS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(CURL_LIBS) -ljansson -lctru -lm
@@ -56,6 +58,6 @@ $(BUILD)/romfs/certs.pem: $(CA_FILE) force
 
 force:
 clean:
-	rm -rf build streetless.elf streetless.smdh streetless.3dsx streetless-slot-export.elf streetless-slot-export.smdh streetless-slot-export.3dsx
+	rm -rf build streetless.elf streetless.smdh streetless.3dsx streetless.cia streetless-slot-export.elf streetless-slot-export.smdh streetless-slot-export.3dsx
 
 -include $(OBJECTS:.o=.d)

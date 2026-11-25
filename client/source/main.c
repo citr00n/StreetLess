@@ -1,16 +1,7 @@
 #include <3ds.h>
 
-#ifdef STREETLESS_TEST_SLOT_EXPORT
 #include "export.h"
-
-int main(void) {
-    gfxInitDefault();
-    consoleInit(GFX_TOP, NULL);
-    export_run();
-    gfxExit();
-    return 0;
-}
-#else
+#include <string.h>
 #include "config.h"
 #include "http.h"
 #include "pair.h"
@@ -61,17 +52,38 @@ bool ui_confirm(const char *heading, const char *target, const char *message) {
     return false;
 }
 
+static bool enter_debug_pin(char pin[5]) {
+    if (!ui_confirm("Debug mode", NULL,
+        "Isolated non-production use only.\n"
+        "HTTP is plaintext. A LAN attacker can\n"
+        "impersonate the server and read traffic.\n"
+        "Never use production credentials.")) return false;
+    SwkbdState state;
+    char entered[5] = "";
+    swkbdInit(&state, SWKBD_TYPE_NUMPAD, 2, 4);
+    swkbdSetHintText(&state, "Four-digit server debug PIN");
+    if (swkbdInputText(&state, entered, sizeof(entered)) != SWKBD_BUTTON_CONFIRM) return false;
+    if (!http_debug_pin_valid(entered)) {
+        ui_message("PIN must be exactly four digits.");
+        return false;
+    }
+    memcpy(pin, entered, sizeof(entered));
+    return true;
+}
+
 static void run_menu(Config *config, bool valid) {
-    static const char *const items[] = {"Sync", "Privacy", "Friends", "Rooms", "Outgoing", "Pair console"};
+    static const char *const items[] = {"Sync", "Privacy", "Friends", "Rooms", "Outgoing", "Pair console", "Debug mode", "Export local slot"};
     static const SocialPage pages[] = {SOCIAL_PRIVACY, SOCIAL_FRIENDS, SOCIAL_ROOMS, SOCIAL_OUTGOING};
-    enum { count = sizeof(items) / sizeof(items[0]) };
     Http http;
-    bool connected = valid && http_open(&http, config, "romfs:/certs.pem");
-    unsigned selected = valid ? 0 : count - 1;
+    char pin[5] = "";
+    bool debug = false;
+    bool connected = valid && http_open(&http, config, "romfs:/certs.pem", NULL);
+    unsigned selected = valid ? 0 : 5;
     bool consented = false, sync_disabled = false;
     while (ui_running()) {
+        unsigned count = debug ? 8 : 7;
         consoleClear();
-        puts("Streetless\n\nStreetPass over the Internet\n");
+        printf("Streetless\n\n%s\n\n", debug ? "DEBUG: plaintext HTTP" : "Production: verified HTTPS");
         for (unsigned i = 0; i < count; ++i)
             printf("%s %s%s\n", selected == i ? ">" : " ", items[i],
                    i == 0 && sync_disabled ? " (restart console)" : "");
@@ -80,14 +92,32 @@ static void run_menu(Config *config, bool valid) {
         if (keys & KEY_UP) selected = (selected + count - 1) % count;
         else if (keys & KEY_DOWN) selected = (selected + 1) % count;
         else if (keys & KEY_A) {
-            if (selected == count - 1) {
+            if (selected == 6) {
+                if (debug) {
+                    consoleClear();
+                    puts("Debug mode\n\nA Re-enter server PIN\nX Return to production HTTPS\nB Cancel");
+                    uint32_t k;
+                    do { k = ui_keys(); } while (k && !(k & (KEY_A | KEY_B | KEY_X)));
+                    if (k & KEY_X) { debug = false; memset(pin, 0, sizeof(pin)); }
+                    else if (k & KEY_A) { if (!enter_debug_pin(pin)) continue; }
+                    else continue;
+                } else {
+                    if (!enter_debug_pin(pin)) continue;
+                    debug = true;
+                }
                 if (connected) { http_close(&http); connected = false; }
-                if (pair_run(config)) valid = true;
-                if (valid) connected = http_open(&http, config, "romfs:/certs.pem");
+                if (valid) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
+            } else if (selected == 7) {
+                if (sync_disabled) ui_message("Restart the console before using CECD again.");
+                else if (!export_run()) sync_disabled = true;
+            } else if (selected == 5) {
+                if (connected) { http_close(&http); connected = false; }
+                if (pair_run(config, debug ? pin : NULL)) valid = true;
+                if (valid) connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
             } else if (!valid) {
                 ui_message("Pair this console first, or install an existing\nconfig.txt in /3ds/streetless/.");
             } else if (!connected) {
-                connected = http_open(&http, config, "romfs:/certs.pem");
+                connected = http_open(&http, config, "romfs:/certs.pem", debug ? pin : NULL);
                 if (!connected) ui_message("Cannot initialize Streetless networking.");
             } else if (selected) {
                 social_open(&http, pages[selected - 1]);
@@ -109,6 +139,7 @@ static void run_menu(Config *config, bool valid) {
         }
     }
     if (connected) http_close(&http);
+    memset(pin, 0, sizeof(pin));
 }
 
 int main(void) {
@@ -128,4 +159,3 @@ int main(void) {
     gfxExit();
     return 0;
 }
-#endif
