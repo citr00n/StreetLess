@@ -58,6 +58,6 @@ $(BUILD)/romfs/certs.pem: $(CA_FILE) force
 
 force:
 clean:
-	rm -rf build streetless.elf streetless.smdh streetless.3dsx streetless.cia streetless-slot-export.elf streetless-slot-export.smdh streetless-slot-export.3dsx
+	rm -rf build streetless.elf streetless.smdh streetless.3dsx streetless.cia
 
 -include $(OBJECTS:.o=.d)

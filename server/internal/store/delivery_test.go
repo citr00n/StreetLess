@@ -190,14 +190,14 @@ func TestPublicQuota(t *testing.T) {
 	a, _ := testPeer(t, s, "recipient")
 	recv := titleSlot(t, 1, 0)
 	mustSync(t, s, a, recv)
-	for i, label := range []string{"one", "two", "three", "four"} {
+	for i, label := range []string{"one", "two", "three", "four", "five", "six"} {
 		p, _ := testPeer(t, s, label)
 		out := titleSlot(t, 2, byte(i+1))
 		mustSync(t, s, p, out)
 		got := mustSync(t, s, a, recv)
-		if i == 3 {
+		if i == 5 {
 			if len(got) != 0 {
-				t.Fatal("fourth public pass bypassed quota")
+				t.Fatal("sixth public pass bypassed quota")
 			}
 			break
 		}

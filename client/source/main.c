@@ -126,7 +126,7 @@ static void run_menu(Config *config, bool valid) {
             } else if (consented || ui_confirm("Sync", NULL,
                        "Sync sends eligible game passes through\n"
                        "the routes you allow. The public hall allows\n"
-                       "at most 3 incoming passes per 24 hours.\n"
+                       "at most 5 incoming passes per 24 hours.\n"
                        "Some games require a two-way exchange.")) {
                 consented = true;
                 consoleClear();

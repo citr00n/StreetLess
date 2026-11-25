@@ -81,7 +81,7 @@ static bool valid_me(json_t *me) {
     return object_size(me, 6) && id_field(me, "id") && label_field(me, "label") &&
            valid_code(json_string_value(code), json_string_length(code), false) &&
            bool_field(me, "public_enabled") &&
-           count_field(me, "public_used") && number(me, "public_used") <= 3 &&
+           count_field(me, "public_used") && number(me, "public_used") <= 5 &&
            count_field(me, "pending_inbox");
 }
 
@@ -373,7 +373,7 @@ static const char *send_state(json_t *send) {
 static void build_privacy(Menu *m, json_t *me) {
     m->title = "Privacy";
     bool public = flag(me, "public_enabled");
-    detail(m, "Public: %s  (%" PRId64 "/3 used in 24h)\n"
+    detail(m, "Public: %s  (%" PRId64 "/5 used in 24h)\n"
               "Waiting inbox: %" PRId64 " (received via Sync)\n\n"
               "Public Off stops random exchange both ways.\n",
               on_off(public), number(me, "public_used"), number(me, "pending_inbox"));

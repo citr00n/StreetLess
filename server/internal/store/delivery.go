@@ -88,7 +88,7 @@ func matchPublic(ctx context.Context, tx *sql.Tx, id int64, titles []wire.Title,
 		rows, err := tx.QueryContext(ctx, `SELECT o.participant_id,o.mode,o.free_count,o.free_bytes,o.max_message,o.max_batch,o.message_count,o.message_bytes,o.largest_message,
 			(SELECT count(*)<16 AND count(CASE WHEN d.sender_id=? THEN 1 END)=0 FROM deliveries d WHERE d.recipient_id=o.participant_id AND d.title=o.title AND d.route<>'test' AND d.created_at>?),
 			(SELECT count(*)<16 AND count(CASE WHEN d.sender_id=o.participant_id THEN 1 END)=0 FROM deliveries d WHERE d.recipient_id=? AND d.title=o.title AND d.route<>'test' AND d.created_at>?),
-			(SELECT count(*)<3 FROM public_receipts r WHERE r.recipient_id=o.participant_id AND r.created_at>?)
+			(SELECT count(*)<5 FROM public_receipts r WHERE r.recipient_id=o.participant_id AND r.created_at>?)
 		 FROM outboxes o JOIN participants p ON p.id=o.participant_id
 		 WHERE o.title=? AND o.updated_at>? AND o.participant_id<>? AND p.revoked_at IS NULL AND p.public_enabled AND o.public_ready
 		 AND NOT EXISTS(SELECT 1 FROM matches m WHERE m.low_id=min(?,o.participant_id) AND m.high_id=max(?,o.participant_id) AND m.title=o.title AND m.matched_at>?)`,
@@ -105,7 +105,7 @@ func matchPublic(ctx context.Context, tx *sql.Tx, id int64, titles []wire.Title,
 				return err
 			}
 			forward := len(self.Slot) > 0 && peerQueue && peerBudget && peer.Fits(self.Stats)
-			backward := peer.Stats.Count > 0 && selfQueue && used < 3 && self.Fits(peer.Stats)
+			backward := peer.Stats.Count > 0 && selfQueue && used < 5 && self.Fits(peer.Stats)
 			if (!forward && !backward) || ((self.Mode == 0 || peer.Mode == 0) && !(forward && backward)) {
 				continue
 			}

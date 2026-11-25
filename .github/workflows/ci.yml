@@ -34,6 +34,12 @@ jobs:
           /tmp/streetless-wire-test
           cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/pair.c client/source/config.c client/tests/pair_test.c -o /tmp/streetless-pair-test
           /tmp/streetless-pair-test
+      - name: Test client debug transport
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+          cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_debug_test.c -lcurl -o /tmp/streetless-http-test
+          /tmp/streetless-http-test
       - name: Test Compose HTTPS deployment
         shell: bash
         run: |
@@ -72,18 +78,33 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Build both 3DS clients
+      - name: Build CIA packaging tools
+        shell: bash
         run: |
-          docker run --rm -v "$PWD:/work" -w /work \
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/streetless-tools"
+          git clone https://github.com/3DSGuy/Project_CTR.git "$RUNNER_TEMP/project-ctr"
+          git -C "$RUNNER_TEMP/project-ctr" checkout --detach d52c2b0e788c2d085763d7c5dcc4b2edd9ffb7d8
+          make -C "$RUNNER_TEMP/project-ctr/makerom" deps
+          make -C "$RUNNER_TEMP/project-ctr/makerom"
+          cp "$RUNNER_TEMP/project-ctr/makerom/bin/makerom" "$RUNNER_TEMP/streetless-tools/"
+          git clone https://github.com/Epicpkmn11/bannertool.git "$RUNNER_TEMP/bannertool"
+          git -C "$RUNNER_TEMP/bannertool" checkout --detach 51dac927a4c43de769900d91fd3cb6142295263f
+          git -C "$RUNNER_TEMP/bannertool" -c url.https://github.com/.insteadOf=git://github.com/ submodule update --init --recursive
+          make -C "$RUNNER_TEMP/bannertool"
+          cp "$RUNNER_TEMP/bannertool/output/linux-x86_64/bannertool" "$RUNNER_TEMP/streetless-tools/"
+      - name: Build 3DS client
+        run: |
+          docker run --rm -v "$PWD:/work" -v "$RUNNER_TEMP/streetless-tools:/streetless-tools:ro" -w /work \
             devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5 \
-            sh -lc 'set -e; dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson; make -C client; make -C client TEST_SLOT_EXPORT=1; test -s client/streetless.3dsx; test -s client/streetless-slot-export.3dsx'
+            sh -lc 'set -e; dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson python; export PATH="/streetless-tools:$PATH"; make -C client; test -s client/streetless.3dsx; test -s client/streetless.cia'
       - name: Upload 3DS client artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: streetless-3ds
           path: |
             client/streetless.3dsx
-            client/streetless-slot-export.3dsx
+            client/streetless.cia
           if-no-files-found: error
 
   release-version:
@@ -130,6 +151,14 @@ jobs:
           echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           docker push "ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME}"
           docker logout ghcr.io
+      - name: Generate FBI installation QR code
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qrencode
+          printf 'https://github.com/%s/releases/download/%s/streetless.cia' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" |
+            qrencode -t PNG -o release/streetless-cia-qr.png
       - name: Publish client release
         shell: bash
         env:
@@ -140,5 +169,5 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
             args+=(--prerelease)
           fi
-          gh release create "$GITHUB_REF_NAME" release/streetless.3dsx release/streetless-slot-export.3dsx \
+          gh release create "$GITHUB_REF_NAME" release/streetless.3dsx release/streetless.cia release/streetless-cia-qr.png \
             --verify-tag --title "$GITHUB_REF_NAME" --generate-notes "${args[@]}"

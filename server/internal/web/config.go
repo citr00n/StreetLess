@@ -16,8 +16,8 @@ type Config struct {
 	Port                                     int
 	AdminHash                                [32]byte
 	Transport, Listen, DB, CertFile, KeyFile string
-	Debug bool
-	DebugPIN string
+	Debug                                    bool
+	DebugPIN                                 string
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {

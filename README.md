@@ -4,16 +4,16 @@
 
 Streetless brings Nintendo 3DS StreetPass encounters online through a self-hosted relay. The project is inspired by [NetPass](https://gitlab.com/3ds-netpass/netpass); it is an independent service, not affiliated with NetPass or Nintendo
 
-The client exchanges native game data over HTTPS/TCP, with an explicit relay IPv4 address so normal operation does not depend on DNS or UDP. Connectivity may still be affected by restrictions on the relay IP, TCP, TLS, or hostname. Only actual hardware testing can establish compatibility with a particular game or provider.
+In normal mode the client exchanges native game data over HTTPS/TCP, with an explicit relay IPv4 address so operation does not depend on DNS or UDP. An explicitly enabled debug mode also supports unencrypted HTTP for isolated development. Connectivity may still be affected by restrictions on the relay IP, TCP, TLS, or hostname. Only actual hardware testing can establish compatibility with a particular game or provider.
 
 ## Getting started
 
 1. Open your relay's website and register an account. On a relay configured to require approval, wait for an administrator to approve it.
-2. Install `streetless.3dsx` in `/3ds/streetless/` on the SD card and launch it with Homebrew Launcher.
+2. Install `streetless.3dsx` in `/3ds/streetless/` on the SD card and launch it with Homebrew Launcher, or install `streetless.cia` with a CIA installer on a suitably configured homebrew console.
 3. In your account, generate a one-time pairing code. On your 3DS, scan its QR code or enter the relay address, IPv4 address and pairing code. Codes expire after ten minutes. Never share a code with anyone you do not want to connect to your account. StreetPass must already be enabled in a supported game, such as Mii Plaza; select **Sync** to exchange game data.
-4. The public lobby is enabled by default and accepts at most three random incoming slots per rolling 24 hours. Switch it off for friends and invited rooms only. An explicit send requested on the site waits for the sender's next 3DS Sync; receiving also requires a Sync on the recipient's console.
+4. The public lobby is enabled by default and accepts at most five random incoming slots per rolling 24 hours. Switch it off for friends and invited rooms only. An explicit send requested on the site waits for the sender's next 3DS Sync; receiving also requires a Sync on the recipient's console.
 
-A pairing code is temporary and can be claimed only by one console. Pairing again replaces the previous 3DS credential. The client verifies HTTPS certificates and does not fall back to plaintext. A QR image or code is sensitive until it expires: do not post it publicly or send it to an untrusted device.
+A pairing code is temporary and can be claimed only by one console. Pairing again replaces the previous 3DS credential. In normal mode the client verifies HTTPS certificates and does not fall back to plaintext. A QR image or code is sensitive until it expires: do not post it publicly or send it to an untrusted device.
 
 Account passwords must be 8–128 UTF-8 bytes. Common passwords and trivial repeated or sequential patterns are rejected; this filter cannot guarantee a strong password, so use a unique password or passphrase. Browser sessions expire after 24 hours.
 
@@ -29,7 +29,7 @@ docker build -t streetless:local .
 
 The image contains only the server binary and runs as an unprivileged user by default. Its `/data` directory must be mounted from persistent, writable storage. The examples below run Docker as a non-root host user and explicitly use that user's UID and GID so the bind-mounted data and secrets are accessible.
 
-**The public website and 3DS API require HTTPS.** The 3DS client verifies the TLS certificate and does not support plain HTTP. Use either direct TLS in Streetless or TLS termination at a reverse proxy. Proxy mode uses plain HTTP only on the same host's loopback interface; never expose that backend port.
+**The production website and 3DS API require HTTPS.** The normal client verifies the TLS certificate and does not support plain HTTP. Use either direct TLS in Streetless or TLS termination at a reverse proxy. Proxy mode uses plain HTTP only on the same host's loopback interface; never expose that backend port. The separate debug mode described below is for isolated development only.
 
 Point a domain at the relay's public IPv4 address and obtain a certificate for that domain, including its full certificate chain. The default 3DS client trusts ISRG Root X1; use a compatible certificate chain or build the client with a different trusted root as described below. Open the public TCP port in the host firewall and provider's firewall.
 
@@ -158,29 +158,97 @@ Use `docker logs streetless` to inspect startup errors and `docker stop streetle
 
 ## Building the 3DS client
 
-Install devkitPro with `3ds-dev`, `3ds-curl` and `3ds-jansson`, then run `make -C client`. Alternatively:
+Install devkitPro with `3ds-dev`, `3ds-curl` and `3ds-jansson`, Python 3, and compatible `makerom` and `bannertool` executables on `PATH`. Run `make -C client` to build both formats. To build only the Homebrew Launcher version without the CIA packaging tools, run `make -C client streetless.3dsx`.
+
+For example, on an x86-64 Linux build host with Git, make and a C compiler, build the same pinned packaging tools used in CI:
 
 ```sh
-docker run --rm -v "$PWD:/work" -w /work \
-  devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5 \
-  sh -lc 'dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson && make -C client'
+D=$(mktemp -d)
+git clone https://github.com/3DSGuy/Project_CTR.git "$D/project-ctr"
+git -C "$D/project-ctr" checkout --detach d52c2b0e788c2d085763d7c5dcc4b2edd9ffb7d8
+make -C "$D/project-ctr/makerom" deps
+make -C "$D/project-ctr/makerom"
+git clone https://github.com/Epicpkmn11/bannertool.git "$D/bannertool"
+git -C "$D/bannertool" checkout --detach 51dac927a4c43de769900d91fd3cb6142295263f
+git -C "$D/bannertool" -c url.https://github.com/.insteadOf=git://github.com/ submodule update --init --recursive
+make -C "$D/bannertool"
+mkdir -p "$D/tools"
+cp "$D/project-ctr/makerom/bin/makerom" "$D/bannertool/output/linux-x86_64/bannertool" "$D/tools/"
+export STREETLESS_CIA_TOOLS="$D/tools"
 ```
 
-The output is `client/streetless.3dsx`. For a test CA, rebuild with `make -C client CA_FILE=/absolute/path/to/root.pem`. A real console needs current system software and Luma3DS; neither emulator fixtures nor a successful build establish hardware compatibility.
+With these Linux tools, use the matching x86-64 devkitPro Docker image from the repository root:
 
-## Admin test deliveries
+```sh
+docker run --rm --platform linux/amd64 -v "$PWD:/work" \
+  -v "$STREETLESS_CIA_TOOLS:/streetless-tools:ro" -w /work \
+  devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5 \
+  sh -lc 'dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson python && PATH="/streetless-tools:$PATH" make -C client'
+```
 
-The recipient must first opt in to admin test passes in their account or in the 3DS Privacy menu. Build the separate exporter with `make -C client TEST_SLOT_EXPORT=1`; run `streetless-slot-export.3dsx` on a test console and export an enabled game's native slot. Upload the resulting `/3ds/streetless/test-XXXXXXXX.slot` in the admin dashboard for the selected recipient. Use only data that the console owner agreed to share.
+The outputs are `client/streetless.3dsx` and `client/streetless.cia`. The CIA is unsigned homebrew and requires Luma3DS/CFW with signature patches. On systems without compatible packaging tools, use the CI artifacts or build only `.3dsx`. For a test CA, rebuild with `make -C client CA_FILE=/absolute/path/to/root.pem`. A real console needs current system software and Luma3DS; neither emulator fixtures nor a successful build establish hardware compatibility.
 
-A test pass expires after 24 hours, does not generate an automatic return pass and does not consume the public-lobby quota. Syncing the recipient commits a valid pass before ACK; a confirmed malformed slot or invalid HMAC is rejected. Full inboxes and temporary errors leave the pass queued.
+## Debug mode and test deliveries
+
+**Debug mode is unsafe on an untrusted network.** HTTP exposes account passwords, console tokens, pairing codes, native slots and the debug PIN. A four-digit PIN is not encryption and cannot authenticate a server against an active network attacker. Use a separate test database and disposable accounts on an isolated LAN; never expose the debug listener to the Internet or use production credentials or game data without consent.
+
+Start the server with `STREETLESS_DEBUG=1` or the `--debug` argument. Debug mode accepts an `http://` origin and prints a new four-digit PIN to the server console at every start. The console's debug mode requires this PIN and verifies that it is connecting to a debug server before sending credentials or game data; a normal production server cannot be used as a debug server. Re-enter the PIN after restarting the server. Normal mode continues to require HTTPS with certificate verification.
+
+On the 3DS, choose **Debug mode** in the main menu, accept the plaintext warning and enter the server PIN. Pair the console using the account's QR code or manual details. Choose **Debug mode** again and press **A** to enter a new PIN, or **X** to return to production HTTPS. The PIN is held only in memory and debug mode resets when the application exits. **Export local slot** appears only while debug mode is enabled.
+
+Admin test deliveries are available only on a debug server. The administrator may select any active participant; no recipient opt-in is required. Export an original native slot using the debug option in the client, then upload `/3ds/streetless/test-XXXXXXXX.slot` on the admin dashboard. Only export and share slots with their owner's consent. A test delivery expires after 24 hours, does not generate an automatic return pass and does not consume the public-lobby quota. A valid pass is committed before ACK; confirmed malformed slots and invalid HMACs are rejected, while full inboxes and temporary errors leave the pass queued.
+
+For a loopback-only development server on the same machine, from the repository root:
+
+```sh
+umask 077
+D=$(mktemp -d)
+openssl rand -hex 32 > "$D/admin-password.txt"
+tr -d '\n' < "$D/admin-password.txt" | openssl dgst -sha256 -r | cut -d ' ' -f1 > "$D/admin.sha256"
+cd server
+env -u STREETLESS_TRANSPORT \
+  STREETLESS_DEBUG=1 STREETLESS_ORIGIN=http://localhost:8080 \
+  STREETLESS_LISTEN=127.0.0.1:8080 STREETLESS_PUBLIC_IPV4=127.0.0.1 \
+  STREETLESS_ADMIN_HASH_FILE="$D/admin.sha256" STREETLESS_DB="$D/test.sqlite" \
+  go run ./cmd/streetlessd
+```
+
+Open `http://localhost:8080/` on that machine and sign in as `admin` with the password in `$D/admin-password.txt`. To connect a real 3DS, use a trusted isolated LAN, set `STREETLESS_LISTEN` and `STREETLESS_PUBLIC_IPV4` to the host's reachable LAN IPv4, and set `STREETLESS_ORIGIN` to a hostname and port the browser uses for the relay. The 3DS connects to the configured IPv4 directly. Preserve `D` if you need to reuse this test database; delete it only when its test data is no longer needed.
+
+## Development
+
+Prerequisites: Go 1.26+, a C compiler, OpenSSL, and devkitPro with `3ds-dev`, `3ds-curl`, and `3ds-jansson`. Docker is optional for reproducing the container and client builds. `server/` contains the Go relay and SQLite store; `client/` contains the 3DS application, native CECD code, and host-side codec tests. The server embeds the HTML templates and CSS from `server/internal/web/`.
+
+Run the server checks from the repository root:
+
+```sh
+cd server
+go test ./...
+go vet ./...
+cd ..
+```
+
+Run the portable client tests and build the console application:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test
+/tmp/streetless-wire-test
+cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/pair.c client/source/config.c client/tests/pair_test.c -o /tmp/streetless-pair-test
+/tmp/streetless-pair-test
+cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_debug_test.c -lcurl -o /tmp/streetless-http-test
+/tmp/streetless-http-test
+make -C client
+```
+
+For a local debug relay, see the debug instructions above. Keep its database, credentials, and native slot exports separate from production and out of version control. Format changed Go code with `gofmt`; run the relevant tests before opening a pull request. Cross-compilation and synthetic fixtures do not substitute for a two-console hardware test.
 
 ## Verification
 
 - `cd server && go test ./...` exercises the server, SQLite routing and proxy behavior.
 - From the repository root: `cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test && /tmp/streetless-wire-test`.
-- GitHub Actions runs the Go tests and vet, the native wire and pairing tests, a Docker Compose HTTPS smoke test, and builds both 3DS client variants on pushes and pull requests. After the tests and builds pass, download both `.3dsx` files from the workflow run's `streetless-3ds` artifact.
+- GitHub Actions runs the Go tests and vet, the native wire and pairing tests, a Docker Compose HTTPS smoke test, and builds both 3DS client formats on pushes and pull requests. After the tests and build pass, download both files from the workflow run's `streetless-3ds` artifact.
 - Verify QR scanning, pairing and StreetPass delivery on real 3DS hardware. A successful server test or cross-compilation is not hardware proof.
 
-Version tags such as `v1.2.3` or `v1.2.3-rc.1` publish both 3DS builds to a GitHub Release and the relay image to `ghcr.io/<owner>/<repository>:<tag>` (owner and repository are lowercase). Prerelease tags create prereleases; no `latest` tag is published.
+Version tags such as `v1.2.3` or `v1.2.3-rc.1` publish `streetless.3dsx`, `streetless.cia` and `streetless-cia-qr.png` to a GitHub Release, and the relay image to `ghcr.io/<owner>/<repository>:<tag>` (owner and repository are lowercase). The QR encodes the release's direct CIA download URL for a CIA installer such as FBI; the release must be publicly accessible to the console. Prerelease tags create prereleases; no `latest` tag is published.
 
 CECD wrappers are derived from [NetPass](https://gitlab.com/3ds-netpass/netpass) and retain their copyright notices. The code is distributed under GPL-3.0-or-later; see [LICENSE](LICENSE). Do not copy NetPass artwork or sound assets without satisfying their separate license.

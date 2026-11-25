@@ -135,7 +135,9 @@ func debugEdge(t *testing.T, s *store.Store) (*httptest.Server, string) {
 	authority := front.Listener.Addr().String()
 	host, port, _ := strings.Cut(authority, ":")
 	num, err := strconv.Atoi(port)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := Config{Origin: "http://" + authority, Host: host, Port: num, IPv4: "127.0.0.1", AdminHash: sha256.Sum256([]byte(testAdmin)), Debug: true, DebugPIN: "0123"}
 	app = New(s, cfg)
 	front.Start()
@@ -143,7 +145,6 @@ func debugEdge(t *testing.T, s *store.Store) (*httptest.Server, string) {
 	front.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return front, cfg.Origin
 }
-
 
 func request(t *testing.T, f *httptest.Server, method, path, content, origin, token string, p []byte) *http.Request {
 	t.Helper()

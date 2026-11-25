@@ -32,8 +32,8 @@ var (
 var schema string
 
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db    *sql.DB
+	now   func() time.Time
 	debug bool
 }
 type Principal struct {
@@ -145,6 +145,7 @@ func Open(path string, now func() time.Time) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
 // SetDebug enables isolated test-delivery behavior before serving requests.
 func (s *Store) SetDebug(debug bool) { s.debug = debug }
 
