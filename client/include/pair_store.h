@@ -5,6 +5,7 @@
 typedef struct {
     const char *step;
     int error;
+    uint32_t native;
 } PairStoreError;
 
 /* A failed rename leaves the flushed temporary file for recovery. */

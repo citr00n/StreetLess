@@ -56,8 +56,12 @@ static bool remove_file(const char *path) { return unlink(path) == 0 || errno ==
 
 static void save_error(const char *message, const PairStoreError *error) {
     char text[240];
-    snprintf(text, sizeof(text), "%s\nSD %s failed (errno %d).\nRetry from Pair console.",
-             message, error->step, error->error);
+    if (error->native)
+        snprintf(text, sizeof(text), "%s\nSD %s failed: %08lX.\nRetry from Pair console.",
+                 message, error->step, (unsigned long)error->native);
+    else
+        snprintf(text, sizeof(text), "%s\nSD %s failed (errno %d).\nRetry from Pair console.",
+                 message, error->step, error->error);
     ui_message(text);
 }
 
