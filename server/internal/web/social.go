@@ -14,7 +14,7 @@ func parseAction(v url.Values) (store.Action, bool) {
 	a := store.Action{Kind: v.Get("action")}
 	var fields []string
 	switch a.Kind {
-	case "public_set", "test_set":
+	case "public_set":
 		fields = []string{"enabled"}
 	case "friend_request":
 		fields = []string{"code"}
@@ -77,7 +77,7 @@ func destructive(a store.Action) bool {
 	switch a.Kind {
 	case "friend_remove", "room_leave", "room_remove", "room_close", "send_cancel":
 		return true
-	case "public_set", "test_set", "friend_set", "room_set":
+	case "public_set", "friend_set", "room_set":
 		return !a.Enabled
 	default:
 		return false

@@ -63,8 +63,12 @@ func TestMigrateExistingRelay(t *testing.T) {
 		t.Fatalf("legacy login: %v", err)
 	}
 	var version int
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 4 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 5 {
 		t.Fatalf("migration version = %d (%v)", version, err)
+	}
+	var obsolete int
+	if err := s.db.QueryRow("SELECT count(*) FROM pragma_table_info('participants') WHERE name='test_enabled'").Scan(&obsolete); err != nil || obsolete != 0 {
+		t.Fatalf("obsolete column remains: %d %v", obsolete, err)
 	}
 }
 

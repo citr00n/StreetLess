@@ -98,7 +98,7 @@ func (s *server) adminPage(w http.ResponseWriter, r *http.Request, c cursors, st
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	data := page{Title: "Admin dashboard", Error: msg, Admin: view, Now: time.Now(), Pending: pending, IsAdmin: true, Registration: registration}
+	data := page{Title: "Admin dashboard", Error: msg, Admin: view, Now: time.Now(), Pending: pending, IsAdmin: true, Registration: registration, Debug: s.cfg.Debug}
 	if n := len(view.Participants); n != 0 && view.MoreParticipants {
 		data.NextParticipants = c.next(0, view.Participants[n-1].ID, "participants")
 	}
@@ -305,6 +305,10 @@ func readTestParts(r *multipart.Reader) (testUpload, int) {
 }
 
 func (s *server) adminTestDelivery(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.Debug {
+		http.NotFound(w, r)
+		return
+	}
 	up, status := readTestUpload(w, r)
 	if status != 0 {
 		msg := ""
@@ -316,9 +320,7 @@ func (s *server) adminTestDelivery(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := s.db.CreateTestDelivery(r.Context(), up.recipient, up.label, up.title, up.slot, up.stats); err != nil {
 		msg := ""
-		if errors.Is(err, store.ErrTestDisabled) {
-			msg = "The participant has not enabled test passes."
-		} else if errors.Is(err, store.ErrConflict) {
+		if errors.Is(err, store.ErrConflict) {
 			msg = "The pending test delivery limit has been reached."
 		}
 		s.adminError(w, r, storeStatus(err), msg)

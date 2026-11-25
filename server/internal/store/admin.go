@@ -19,7 +19,7 @@ type AdminView struct {
 type AdminParticipant struct {
 	ID                                 int64
 	Label                              string
-	Active, PublicEnabled, TestEnabled bool
+	Active, PublicEnabled bool
 	CreatedAt                          time.Time
 	LastSync                           *time.Time
 }
@@ -58,7 +58,7 @@ func scanAdminParticipant(r *sql.Rows) (AdminParticipant, error) {
 	var p AdminParticipant
 	var created int64
 	var last sql.NullInt64
-	err := r.Scan(&p.ID, &p.Label, &p.Active, &p.PublicEnabled, &p.TestEnabled, &created, &last)
+	err := r.Scan(&p.ID, &p.Label, &p.Active, &p.PublicEnabled, &created, &last)
 	p.CreatedAt = time.Unix(created, 0).UTC()
 	if last.Valid {
 		t := time.Unix(last.Int64, 0).UTC()
@@ -88,18 +88,18 @@ func (s *Store) Admin(ctx context.Context, participantsBefore, roomsBefore, queu
 		if err := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM participants WHERE revoked_at IS NULL),
 		 (SELECT count(*) FROM participants WHERE revoked_at IS NULL AND last_sync_at>?), (SELECT count(*) FROM rooms),
 		 count(CASE WHEN route='public' THEN 1 END), count(CASE WHEN route='friend' THEN 1 END),
-		 count(CASE WHEN route='room' THEN 1 END),count(CASE WHEN route='test' THEN 1 END)
-		 FROM deliveries WHERE created_at>CASE WHEN route='test' THEN ? ELSE ? END`, now-day, now-day, now-week).
+		 count(CASE WHEN route='room' THEN 1 END),count(CASE WHEN route='test' AND ? THEN 1 END)
+		 FROM deliveries WHERE created_at>CASE WHEN route='test' THEN ? ELSE ? END`, now-day, s.debug, now-day, now-week).
 			Scan(&view.Active, &view.Recent, &view.RoomCount, &view.Public, &view.Friend, &view.Room, &view.Test); err != nil {
 			return err
 		}
-		const participantFields = "SELECT id,label,revoked_at IS NULL,public_enabled,test_enabled,created_at,last_sync_at FROM participants "
+		const participantFields = "SELECT id,label,revoked_at IS NULL,public_enabled,created_at,last_sync_at FROM participants "
 		players, err := collect(ctx, tx, scanAdminParticipant, participantFields+"WHERE id<? ORDER BY id DESC LIMIT 51", cursor(participantsBefore))
 		if err != nil {
 			return err
 		}
 		view.Participants = capPage(players, &view.MoreParticipants)
-		view.TestRecipients, err = collect(ctx, tx, scanAdminParticipant, participantFields+"WHERE revoked_at IS NULL AND test_enabled=1 ORDER BY label,id")
+		view.TestRecipients, err = collect(ctx, tx, scanAdminParticipant, participantFields+"WHERE revoked_at IS NULL ORDER BY label,id")
 		if err != nil {
 			return err
 		}
@@ -128,8 +128,8 @@ func (s *Store) Admin(ctx context.Context, participantsBefore, roomsBefore, queu
 			return v, err
 		}, `SELECT d.id,coalesce(a.label,'Administrator'),b.label,d.route,coalesce(r.name,''),coalesce(d.test_label,''),d.title,length(d.slot),d.created_at
 		 FROM deliveries d LEFT JOIN participants a ON a.id=d.sender_id JOIN participants b ON b.id=d.recipient_id
-		 LEFT JOIN rooms r ON r.id=d.room_id WHERE d.id<? AND d.created_at>CASE WHEN d.route='test' THEN ? ELSE ? END
-		 ORDER BY d.id DESC LIMIT 51`, cursor(queueBefore), now-day, now-week)
+		 LEFT JOIN rooms r ON r.id=d.room_id WHERE d.id<? AND (d.route<>'test' OR ?) AND d.created_at>CASE WHEN d.route='test' THEN ? ELSE ? END
+		 ORDER BY d.id DESC LIMIT 51`, cursor(queueBefore), s.debug, now-day, now-week)
 		if err != nil {
 			return err
 		}

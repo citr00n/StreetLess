@@ -1,6 +1,7 @@
 package web
 
 import (
+	"crypto/subtle"
 	"errors"
 	"io"
 	"mime"
@@ -28,11 +29,16 @@ func New(db *store.Store, cfg Config) http.Handler {
 	if cfg.Port == 0 {
 		cfg.Port = 443
 	}
+	db.SetDebug(cfg.Debug)
 	s := &server{db: db, cfg: cfg, passwordSlots: make(chan struct{}, 2)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/{$}", only(http.MethodGet, s.home))
 	mux.HandleFunc("/assets/streetless.css", only(http.MethodGet, s.css))
 	mux.HandleFunc("/healthz", only(http.MethodGet, s.health))
+	mux.HandleFunc("/v1/debug", only(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("streetless-debug-v1\n"))
+	}))
 	mux.HandleFunc("/v1/sync", only(http.MethodPost, s.sync))
 	mux.HandleFunc("/v1/pair", only(http.MethodPost, s.pairClaim))
 	mux.HandleFunc("/v1/ack", only(http.MethodPost, s.ack))
@@ -65,6 +71,23 @@ func New(db *store.Store, cfg Config) http.Handler {
 			http.Error(w, "misdirected_request", http.StatusMisdirectedRequest)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			if !s.cfg.Debug && r.URL.Path == "/v1/debug" {
+				http.NotFound(w, r)
+				return
+			}
+			if s.cfg.Debug {
+				pins := r.Header.Values("X-Streetless-Debug-Pin")
+				if len(pins) != 1 || len(s.cfg.DebugPIN) != 4 || subtle.ConstantTimeCompare([]byte(pins[0]), []byte(s.cfg.DebugPIN)) != 1 {
+					if !s.limits.allow(r, "debug-pin", 10, 100) {
+						http.Error(w, "too_many_requests", http.StatusTooManyRequests)
+					} else {
+						http.Error(w, "unauthorized", http.StatusUnauthorized)
+					}
+					return
+				}
+			}
+		}
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -75,7 +98,7 @@ func (s *server) validHost(authority string) bool {
 		return false
 	}
 	if !hasPort {
-		return s.cfg.Port == 443
+		return s.cfg.Port == 443 && !s.cfg.Debug || s.cfg.Port == 80 && s.cfg.Debug
 	}
 	return port == strconv.Itoa(s.cfg.Port)
 }

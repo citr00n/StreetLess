@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"math/big"
 	"log"
 	"net"
 	"net/http"
@@ -23,9 +26,30 @@ func main() {
 }
 
 func run() error {
-	cfg, err := web.LoadConfig(os.Getenv)
+	debugFlag := false
+	for _, arg := range os.Args[1:] {
+		if arg != "--debug" {
+			return fmt.Errorf("unknown argument %q", arg)
+		}
+		debugFlag = true
+	}
+	getenv := func(key string) string {
+		if key == "STREETLESS_DEBUG" && debugFlag {
+			return "1"
+		}
+		return os.Getenv(key)
+	}
+	cfg, err := web.LoadConfig(getenv)
 	if err != nil {
 		return err
+	}
+	if cfg.Debug {
+		pin, err := rand.Int(rand.Reader, big.NewInt(10000))
+		if err != nil {
+			return errors.New("could not generate debug PIN")
+		}
+		cfg.DebugPIN = fmt.Sprintf("%04d", pin.Int64())
+		log.Printf("DEBUG ONLY: isolated non-production HTTP; do not use production credentials. PIN: %s", cfg.DebugPIN)
 	}
 	var tlsConfig *tls.Config
 	if cfg.Transport == "direct" {

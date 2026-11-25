@@ -123,6 +123,27 @@ func edge(t *testing.T, s *store.Store, proxy bool) (*httptest.Server, string) {
 	front.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return front, cfg.Origin
 }
+func debugEdge(t *testing.T, s *store.Store) (*httptest.Server, string) {
+	t.Helper()
+	var app http.Handler
+	front := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			r.Header.Set("X-Streetless-Debug-Pin", "0123")
+		}
+		app.ServeHTTP(w, r)
+	}))
+	authority := front.Listener.Addr().String()
+	host, port, _ := strings.Cut(authority, ":")
+	num, err := strconv.Atoi(port)
+	if err != nil { t.Fatal(err) }
+	cfg := Config{Origin: "http://" + authority, Host: host, Port: num, IPv4: "127.0.0.1", AdminHash: sha256.Sum256([]byte(testAdmin)), Debug: true, DebugPIN: "0123"}
+	app = New(s, cfg)
+	front.Start()
+	t.Cleanup(front.Close)
+	front.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return front, cfg.Origin
+}
+
 
 func request(t *testing.T, f *httptest.Server, method, path, content, origin, token string, p []byte) *http.Request {
 	t.Helper()
@@ -161,7 +182,7 @@ func send(t *testing.T, f *httptest.Server, r *http.Request, status int) ([]byte
 
 func TestAdminTestDelivery(t *testing.T) {
 	s, a, b := setup(t)
-	f, origin := edge(t, s, true)
+	f, origin := debugEdge(t, s)
 	_, login := send(t, f, request(t, f, "POST", "/login", "application/x-www-form-urlencoded", origin, "", []byte(url.Values{"username": {"admin"}, "password": {testAdmin}}.Encode())), 303)
 	adminCookie := login.Cookies()[0]
 	payload := fixture()
@@ -192,8 +213,7 @@ func TestAdminTestDelivery(t *testing.T) {
 	}
 	upload(origin, false, payload, 303)
 	upload("https://wrong.test", true, payload, 403)
-	upload(origin, true, payload, 409)
-	for _, act := range []string{"test_set&enabled=1", "public_set&enabled=0"} {
+	for _, act := range []string{"public_set&enabled=0"} {
 		send(t, f, request(t, f, "POST", "/v1/social", "application/x-www-form-urlencoded", "", a.Token, []byte("action="+act)), 204)
 	}
 	upload(origin, true, []byte{1, 2, 3}, 400)
@@ -215,7 +235,7 @@ func TestAdminTestDelivery(t *testing.T) {
 	}
 	v := deliver(a.Token)
 	if len(v) < 24 || !bytes.Equal(v[24:], payload) {
-		t.Fatal("consented private recipient did not get exact slot")
+		t.Fatal("private recipient did not get exact slot")
 	}
 	id := binary.LittleEndian.Uint64(v[8:])
 	ack := append([]byte("SLA1\x01\x00\x00\x00"), v[8:16]...)

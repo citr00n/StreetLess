@@ -1,6 +1,6 @@
 {{define "head"}}<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Title}} — Streetless</title><link rel="stylesheet" href="/assets/streetless.css"></head>
 <body><a class="skip" href="#main">Skip to content</a><header class="top"><div class="wrap bar"><a class="brand" href="/">Streetless</a><nav aria-label="Main navigation"><a href="/me">Account</a>{{if .IsAdmin}} <a class="button" href="/admin">Admin dashboard</a><form method="post" action="/logout"><button class="secondary">Log out</button></form>{{end}}</nav></div></header>
-<main id="main" class="wrap">{{if .Error}}<p role="alert" class="alert">{{.Error}}</p>{{end}}{{end}}
+<main id="main" class="wrap">{{if .Debug}}<p role="alert" class="alert">Isolated non-production debug mode: HTTP and the PIN cannot protect against an active LAN attacker. Never use production credentials or sensitive data.</p>{{end}}{{if .Error}}<p role="alert" class="alert">{{.Error}}</p>{{end}}{{end}}
 {{define "foot"}}</main><footer class="wrap foot">Streetless · StreetPass over the Internet</footer></body></html>{{end}}
 {{define "confirm"}}<label class="check"><input type="checkbox" name="confirm" value="yes" required> I confirm this action</label>{{end}}

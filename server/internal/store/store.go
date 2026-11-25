@@ -34,6 +34,7 @@ var schema string
 type Store struct {
 	db  *sql.DB
 	now func() time.Time
+	debug bool
 }
 type Principal struct {
 	ID      int64
@@ -66,7 +67,7 @@ func Open(path string, now func() time.Time) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
-	s := &Store{db, now}
+	s := &Store{db: db, now: now}
 	ctx := context.Background()
 	var journal string
 	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&journal); err != nil || journal != "wal" {
@@ -114,10 +115,17 @@ func Open(path string, now func() time.Time) (*Store, error) {
 				return err
 			}
 			if hasAdminSessions {
-				return ensureAdminParticipant(ctx, tx, now)
+				if err := ensureAdminParticipant(ctx, tx, now); err != nil {
+					return err
+				}
+			}
+			fallthrough
+		case 4:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE participants DROP COLUMN test_enabled; PRAGMA user_version=5"); err != nil {
+				return err
 			}
 			return nil
-		case 4:
+		case 5:
 			return nil
 		default:
 			return fmt.Errorf("unsupported SQLite schema version %d", version)
@@ -137,6 +145,9 @@ func Open(path string, now func() time.Time) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+// SetDebug enables isolated test-delivery behavior before serving requests.
+func (s *Store) SetDebug(debug bool) { s.debug = debug }
+
 func (s *Store) Ping(ctx context.Context) error {
 	var one int
 	return s.db.QueryRowContext(ctx, "SELECT 1 FROM sqlite_schema LIMIT 1").Scan(&one)

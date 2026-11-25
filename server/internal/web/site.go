@@ -51,6 +51,7 @@ var pages = template.Must(template.New("site").Funcs(template.FuncMap{
 type page struct {
 	Title, Error                           string
 	IsAdmin                                bool
+	Debug                                  bool
 	Registration                           string
 	Social                                 store.SocialView
 	Admin                                  store.AdminView
@@ -78,7 +79,7 @@ func render(w http.ResponseWriter, status int, name string, data page) {
 }
 
 func (s *server) home(w http.ResponseWriter, _ *http.Request) {
-	render(w, http.StatusOK, "home", page{Title: "Home"})
+	render(w, http.StatusOK, "home", page{Title: "Home", Debug: s.cfg.Debug})
 }
 
 func (s *server) css(w http.ResponseWriter, _ *http.Request) {
@@ -88,20 +89,28 @@ func (s *server) css(w http.ResponseWriter, _ *http.Request) {
 
 const sessionName = "__Host-streetless"
 
-func browserToken(r *http.Request) string {
-	c, err := r.Cookie(sessionName)
+func (s *server) browserToken(r *http.Request) string {
+	name := sessionName
+	if s.cfg.Debug {
+		name = "streetless-debug"
+	}
+	c, err := r.Cookie(name)
 	if err != nil {
 		return ""
 	}
 	return c.Value
 }
 
-func writeSession(w http.ResponseWriter, value string, maxAge int) {
-	http.SetCookie(w, &http.Cookie{Name: sessionName, Value: value, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: maxAge})
+func (s *server) writeSession(w http.ResponseWriter, value string, maxAge int) {
+	name := sessionName
+	if s.cfg.Debug {
+		name = "streetless-debug"
+	}
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", Secure: !s.cfg.Debug, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: maxAge})
 }
 
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
-	data := page{Title: "Sign in"}
+	data := page{Title: "Sign in", Debug: s.cfg.Debug}
 	switch r.Method {
 	case http.MethodGet:
 		render(w, http.StatusOK, "login", data)
@@ -121,9 +130,9 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 					username, password := form.Get("username"), form.Get("password")
 					digest := sha256.Sum256([]byte(password))
 					if strings.EqualFold(username, "admin") && subtle.ConstantTimeCompare(digest[:], s.cfg.AdminHash[:]) == 1 {
-						cookie, err = s.db.LoginAdmin(r.Context(), browserToken(r))
+						cookie, err = s.db.LoginAdmin(r.Context(), s.browserToken(r))
 					} else {
-						cookie, err = s.db.LoginPassword(r.Context(), username, password, browserToken(r))
+						cookie, err = s.db.LoginPassword(r.Context(), username, password, s.browserToken(r))
 					}
 					<-s.passwordSlots
 				}
@@ -134,7 +143,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 				status = storeStatus(err)
 			}
 			if status == 0 {
-				writeSession(w, cookie, 86400)
+				s.writeSession(w, cookie, 86400)
 				http.Redirect(w, r, "/me", http.StatusSeeOther)
 				return
 			}
@@ -161,19 +170,19 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, statusMessage(status), status)
 		return
 	}
-	if cookie := browserToken(r); cookie != "" {
+	if cookie := s.browserToken(r); cookie != "" {
 		if err := s.db.Logout(r.Context(), cookie); err != nil {
 			status := storeStatus(err)
 			http.Error(w, statusMessage(status), status)
 			return
 		}
 	}
-	writeSession(w, "", -1)
+	s.writeSession(w, "", -1)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *server) session(w http.ResponseWriter, r *http.Request) (store.Principal, bool) {
-	if token := browserToken(r); token != "" {
+	if token := s.browserToken(r); token != "" {
 		p, err := s.db.Session(r.Context(), token)
 		if err == nil {
 			return p, true
@@ -200,7 +209,7 @@ func (s *server) mePage(w http.ResponseWriter, r *http.Request, p store.Principa
 		return
 	}
 	if !approved {
-		render(w, http.StatusOK, "pending", page{Title: "Awaiting approval"})
+		render(w, http.StatusOK, "pending", page{Title: "Awaiting approval", Debug: s.cfg.Debug})
 		return
 	}
 	view, err := s.db.Social(r.Context(), p)
@@ -213,7 +222,7 @@ func (s *server) mePage(w http.ResponseWriter, r *http.Request, p store.Principa
 		http.Error(w, statusMessage(status), status)
 		return
 	}
-	data := page{Title: "Account", Social: view, IsAdmin: p.IsAdmin}
+	data := page{Title: "Account", Social: view, IsAdmin: p.IsAdmin, Debug: s.cfg.Debug}
 	if status != http.StatusOK {
 		data.Error = statusMessage(status)
 	}

@@ -26,7 +26,6 @@ type Profile struct {
 	Label         string `json:"label"`
 	FriendCode    string `json:"friend_code"`
 	PublicEnabled bool   `json:"public_enabled"`
-	TestEnabled   bool   `json:"test_enabled"`
 	PublicUsed    int    `json:"public_used"`
 	PendingInbox  int    `json:"pending_inbox"`
 }
@@ -80,15 +79,15 @@ func (s *Store) Social(ctx context.Context, p Principal) (SocialView, error) {
 		if err := active(ctx, tx, p, now); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT id,label,friend_code,public_enabled,test_enabled,
+		if err := tx.QueryRowContext(ctx, `SELECT id,label,friend_code,public_enabled,
 			(SELECT count(*) FROM public_receipts WHERE recipient_id=p.id AND created_at>?),
 			(SELECT count(*) FROM deliveries d LEFT JOIN participants a ON a.id=d.sender_id
-			 WHERE d.recipient_id=p.id AND ((d.route='test' AND p.test_enabled=1 AND d.created_at>?) OR
+			 WHERE d.recipient_id=p.id AND ((d.route='test' AND ? AND d.created_at>?) OR
 			 (d.route!='test' AND a.revoked_at IS NULL AND d.created_at>? AND (
 			 (d.route='public' AND p.public_enabled=1 AND a.public_enabled=1) OR
 			 (d.route='friend' AND `+friendPermission+`) OR (d.route='room' AND `+roomPermission+`)))))
-			FROM participants p WHERE id=?`, now-day, now-day, now-week, p.ID).
-			Scan(&view.Me.ID, &view.Me.Label, &view.Me.FriendCode, &view.Me.PublicEnabled, &view.Me.TestEnabled, &view.Me.PublicUsed, &view.Me.PendingInbox); err != nil {
+			FROM participants p WHERE id=?`, now-day, s.debug, now-day, now-week, p.ID).
+			Scan(&view.Me.ID, &view.Me.Label, &view.Me.FriendCode, &view.Me.PublicEnabled, &view.Me.PublicUsed, &view.Me.PendingInbox); err != nil {
 			return err
 		}
 		if err := socialRows(ctx, tx, func(rows *sql.Rows) error {
@@ -173,15 +172,6 @@ func (s *Store) Act(ctx context.Context, p Principal, a Action) error {
 			return socialExec(ctx, tx,
 				socialSQL{`UPDATE outboxes SET public_ready=0 WHERE participant_id=?`, []any{p.ID}},
 				socialSQL{`DELETE FROM deliveries WHERE route='public' AND (sender_id=? OR recipient_id=?)`, []any{p.ID, p.ID}})
-		case "test_set":
-			if _, err := tx.ExecContext(ctx, `UPDATE participants SET test_enabled=? WHERE id=?`, a.Enabled, p.ID); err != nil {
-				return err
-			}
-			if !a.Enabled {
-				_, err := tx.ExecContext(ctx, `DELETE FROM deliveries WHERE route='test' AND recipient_id=?`, p.ID)
-				return err
-			}
-			return nil
 		case "friend_request", "friend_accept", "friend_remove", "friend_set":
 			return actFriend(ctx, tx, p.ID, a, now)
 		case "room_create", "room_accept", "room_leave", "room_close", "room_invite", "room_remove", "room_set":

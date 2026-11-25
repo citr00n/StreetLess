@@ -16,6 +16,8 @@ type Config struct {
 	Port                                     int
 	AdminHash                                [32]byte
 	Transport, Listen, DB, CertFile, KeyFile string
+	Debug bool
+	DebugPIN string
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
@@ -23,17 +25,27 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	invalid := func(name string) (Config, error) {
 		return Config{}, fmt.Errorf("invalid or missing %s", name)
 	}
+	debug := getenv("STREETLESS_DEBUG")
+	if debug != "" && debug != "0" && debug != "1" {
+		return invalid("STREETLESS_DEBUG")
+	}
+	c.Debug = debug == "1"
 	c.Origin = getenv("STREETLESS_ORIGIN")
-	authority, hasScheme := strings.CutPrefix(c.Origin, "https://")
+	scheme, defaultPort := "https://", 443
+	if c.Debug {
+		scheme, defaultPort = "http://", 80
+	}
+	authority, hasScheme := strings.CutPrefix(c.Origin, scheme)
 	host, port, hasPort := strings.Cut(authority, ":")
-	if !hasScheme || !dnsName(host) {
+	ipHost, ipErr := netip.ParseAddr(host)
+	if !hasScheme || !(dnsName(host) || c.Debug && ipErr == nil && ipHost.Is4()) {
 		return invalid("STREETLESS_ORIGIN")
 	}
-	c.Host, c.Port = host, 443
+	c.Host, c.Port = host, defaultPort
 	if hasPort {
 		var ok bool
 		c.Port, ok = parsePort(port)
-		if !ok || c.Port == 443 {
+		if !ok || c.Port == defaultPort {
 			return invalid("STREETLESS_ORIGIN")
 		}
 	}
@@ -44,8 +56,16 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	c.Listen = getenv("STREETLESS_LISTEN")
 	c.Transport = getenv("STREETLESS_TRANSPORT")
-	switch c.Transport {
-	case "", "direct":
+	switch {
+	case c.Debug:
+		if c.Transport != "" && c.Transport != "debug" {
+			return invalid("STREETLESS_TRANSPORT")
+		}
+		c.Transport = "debug"
+		if c.Listen == "" {
+			c.Listen = "0.0.0.0:8080"
+		}
+	case c.Transport == "" || c.Transport == "direct":
 		c.Transport = "direct"
 		if c.Listen == "" {
 			c.Listen = "0.0.0.0:443"
@@ -57,7 +77,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		if c.KeyFile == "" {
 			return invalid("STREETLESS_TLS_KEY")
 		}
-	case "proxy":
+	case c.Transport == "proxy":
 		if c.Listen == "" {
 			c.Listen = "127.0.0.1:8080"
 		}
@@ -69,7 +89,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	default:
 		return invalid("STREETLESS_TRANSPORT")
 	}
-	if c.Transport == "direct" {
+	if c.Transport == "direct" || c.Transport == "debug" {
 		_, port, err := net.SplitHostPort(c.Listen)
 		_, ok := parsePort(port)
 		if err != nil || !ok {

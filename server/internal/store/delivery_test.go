@@ -220,20 +220,15 @@ func TestPublicQuota(t *testing.T) {
 	}
 }
 
-func TestTestDeliveryConsentAndExpiry(t *testing.T) {
+func TestTestDeliveryIsolationAndExpiry(t *testing.T) {
 	s, now, _ := newTestStore(t)
+	s.SetDebug(true)
 	a, _ := testPeer(t, s, "A")
 	b, _ := testPeer(t, s, "B")
 	ctx := t.Context()
 	native := titleSlot(t, 0, 'T')
 	create := func(ctx context.Context) (int64, error) {
 		return s.CreateTestDelivery(ctx, a.ID, "QA", mii, native.Slot, native.Stats)
-	}
-	if _, err := create(ctx); !errors.Is(err, ErrTestDisabled) {
-		t.Fatalf("creation without consent: %v", err)
-	}
-	if err := s.Act(ctx, a, Action{Kind: "test_set", Enabled: true}); err != nil {
-		t.Fatal(err)
 	}
 	if err := s.Act(ctx, a, Action{Kind: "public_set", Enabled: false}); err != nil {
 		t.Fatal(err)
@@ -260,13 +255,12 @@ func TestTestDeliveryConsentAndExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Act(ctx, a, Action{Kind: "test_set", Enabled: false}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Act(ctx, a, Action{Kind: "test_set", Enabled: true}); err != nil {
-		t.Fatal(err)
-	}
+	s.SetDebug(false)
 	if len(mustSync(t, s, a, local)) != 0 {
-		t.Fatalf("toggle restored old test %d", id)
+		t.Fatalf("production served test %d", id)
+	}
+	s.SetDebug(true)
+	if uint64(id) != expectSlot(t, mustSync(t, s, a, local), native) {
+		t.Fatal("debug queue was lost")
 	}
 }

@@ -155,8 +155,8 @@ func (s *Store) Sync(ctx context.Context, p Principal, titles []wire.Title) ([]w
 		if err := active(ctx, tx, p, now); err != nil {
 			return err
 		}
-		var public, test bool
-		if err := tx.QueryRowContext(ctx, `UPDATE participants SET last_sync_at=? WHERE id=? RETURNING public_enabled,test_enabled`, now, p.ID).Scan(&public, &test); err != nil {
+		var public bool
+		if err := tx.QueryRowContext(ctx, `UPDATE participants SET last_sync_at=? WHERE id=? RETURNING public_enabled`, now, p.ID).Scan(&public); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM outboxes WHERE participant_id=?", p.ID); err != nil {
@@ -186,7 +186,7 @@ func (s *Store) Sync(ctx context.Context, p Principal, titles []wire.Title) ([]w
 			 AND ((d.route='test' AND ? AND d.created_at>?) OR (d.route<>'test' AND src.revoked_at IS NULL AND d.created_at>?))
 			 AND (d.route<>'public' OR (? AND src.public_enabled))
 			 AND d.message_count<=? AND d.message_count<=? AND d.message_bytes<=? AND d.largest_message<=?
-			 ORDER BY CASE d.route WHEN 'public' THEN 1 WHEN 'test' THEN 2 ELSE 0 END,d.id`, p.ID, t.ID, test, now-day, now-week, public, t.FreeCount, t.MaxBatch, t.FreeBytes, t.MaxMessage)
+			 ORDER BY CASE d.route WHEN 'public' THEN 1 WHEN 'test' THEN 2 ELSE 0 END,d.id`, p.ID, t.ID, s.debug, now-day, now-week, public, t.FreeCount, t.MaxBatch, t.FreeBytes, t.MaxMessage)
 			if err != nil {
 				return err
 			}
@@ -239,11 +239,11 @@ func (s *Store) Sync(ctx context.Context, p Principal, titles []wire.Title) ([]w
 	return out, nil
 }
 
-func deleteOwned(ctx context.Context, tx *sql.Tx, recipient int64, id uint64) (bool, error) {
+func deleteOwned(ctx context.Context, tx *sql.Tx, recipient int64, id uint64, debug bool) (bool, error) {
 	if id > math.MaxInt64 {
 		return false, nil
 	}
-	r, err := tx.ExecContext(ctx, "DELETE FROM deliveries WHERE recipient_id=? AND id=?", recipient, int64(id))
+	r, err := tx.ExecContext(ctx, "DELETE FROM deliveries WHERE recipient_id=? AND id=? AND (route<>'test' OR ?)", recipient, int64(id), debug)
 	if err != nil {
 		return false, err
 	}
@@ -257,7 +257,7 @@ func (s *Store) Ack(ctx context.Context, p Principal, ids []uint64) error {
 			return err
 		}
 		for _, id := range ids {
-			if _, err := deleteOwned(ctx, tx, p.ID, id); err != nil {
+			if _, err := deleteOwned(ctx, tx, p.ID, id, s.debug); err != nil {
 				return err
 			}
 		}
@@ -272,7 +272,7 @@ func (s *Store) Reject(ctx context.Context, p Principal, items []wire.Reject) ([
 			return err
 		}
 		for _, item := range items {
-			deleted, err := deleteOwned(ctx, tx, p.ID, item.ID)
+			deleted, err := deleteOwned(ctx, tx, p.ID, item.ID, s.debug)
 			if err != nil {
 				return err
 			}
@@ -289,23 +289,23 @@ func (s *Store) Reject(ctx context.Context, p Principal, items []wire.Reject) ([
 }
 
 func (s *Store) DeleteDelivery(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM deliveries WHERE id=?", id)
+	_, err := s.db.ExecContext(ctx, "DELETE FROM deliveries WHERE id=? AND (route<>'test' OR ?)", id, s.debug)
 	return err
 }
 
 func (s *Store) CreateTestDelivery(ctx context.Context, recipient int64, label string, title uint32, slot []byte, v wire.Stats) (int64, error) {
+	if !s.debug {
+		return 0, ErrTestDisabled
+	}
 	var id int64
 	err := s.mutate(ctx, func(tx *sql.Tx, now int64) error {
-		var enabled bool
-		err := tx.QueryRowContext(ctx, "SELECT test_enabled FROM participants WHERE id=? AND revoked_at IS NULL", recipient).Scan(&enabled)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
+		var exists bool
+		err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM participants WHERE id=? AND revoked_at IS NULL)", recipient).Scan(&exists)
 		if err != nil {
 			return err
 		}
-		if !enabled {
-			return ErrTestDisabled
+		if !exists {
+			return ErrNotFound
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM deliveries WHERE recipient_id=? AND route='test' AND created_at<=?", recipient, now-day); err != nil {
 			return err
