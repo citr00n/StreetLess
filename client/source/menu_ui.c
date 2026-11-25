@@ -44,44 +44,79 @@ static void label(C2D_TextBuf buf, const char *value, float x, float y,
     C2D_DrawText(&text, C2D_WithColor, x, y, 0.5f, scale, scale, color);
 }
 
+#define DETAIL_COLUMNS 44
+#define DETAIL_ROWS 5
+
+/* Consume one display line without losing long words or embedded newlines. */
+static const char *detail_line(const char *p, char line[DETAIL_COLUMNS + 1]) {
+    size_t n = 0, last_space = 0;
+    while (p[n] && p[n] != '\n' && n < DETAIL_COLUMNS) {
+        unsigned char c = (unsigned char)p[n];
+        line[n] = c >= 32 && c <= 126 ? (char)c : ' ';
+        if (line[n] == ' ') last_space = n + 1;
+        ++n;
+    }
+    if (n == DETAIL_COLUMNS && p[n] && p[n] != '\n' && last_space)
+        n = last_space;
+    line[n] = '\0';
+    p += n;
+    if (*p == '\n') ++p;
+    return p;
+}
+
+static const char *detail_page(const char *p, char lines[DETAIL_ROWS][DETAIL_COLUMNS + 1]) {
+    for (size_t i = 0; i < DETAIL_ROWS; ++i) {
+        lines[i][0] = '\0';
+        if (*p) p = detail_line(p, lines[i]);
+    }
+    return p;
+}
+
+static const char *page_start(const char *details, size_t page) {
+    char lines[DETAIL_ROWS][DETAIL_COLUMNS + 1];
+    const char *p = details ? details : "";
+    while (page-- && *p) p = detail_page(p, lines);
+    return p;
+}
+
+static size_t page_count(const char *details) {
+    char lines[DETAIL_ROWS][DETAIL_COLUMNS + 1];
+    const char *p = details ? details : "";
+    size_t count = 1;
+    while (*(p = detail_page(p, lines))) ++count;
+    return count;
+}
+
 static void draw_menu(C3D_RenderTarget *top, C3D_RenderTarget *bottom,
-                      C2D_TextBuf buf, const char *title, const char *status,
+                      C2D_TextBuf buf, const char *title, const char *details,
                       const char *const *items, size_t count, unsigned selected,
-                      bool allow_back) {
+                      const char *footer, size_t page, size_t pages) {
     const u32 ink = COLOR(22, 40, 34), muted = COLOR(76, 102, 91);
     const u32 green = COLOR(0, 108, 79), white = COLOR(255, 255, 255);
     const u32 pale = COLOR(240, 245, 242), border = COLOR(210, 224, 215);
     size_t first = selected >= VISIBLE_ROWS ? selected - VISIBLE_ROWS + 1 : 0;
-    char position[40];
-
-    char status_text[85], status_line[43];
-    clean_text(status_text, sizeof(status_text), status);
-    size_t status_len = strlen(status_text);
-    size_t split = status_len > 42 ? 42 : status_len;
-    if (split < status_len) {
-        while (split > 0 && status_text[split] != ' ') --split;
-        if (!split) split = 42;
-    }
-    memcpy(status_line, status_text, split);
-    status_line[split] = '\0';
+    char position[64], lines[DETAIL_ROWS][DETAIL_COLUMNS + 1];
+    detail_page(page_start(details, page), lines);
     C2D_TextBufClear(buf);
     C2D_TargetClear(top, pale);
     C2D_SceneBegin(top);
     rect(0, 0, 400, 8, green);
-    label(buf, "STREETLESS", 20, 18, 360, 0.48f, green);
-    label(buf, title, 20, 46, 360, 0.78f, ink);
-    rect(20, 86, 360, 1, border);
-    label(buf, status_line, 20, 97, 360, 0.49f, muted);
-    if (split < status_len) {
-        const char *rest = status_text + split;
-        if (*rest == ' ') ++rest;
-        label(buf, rest, 20, 115, 360, 0.49f, muted);
+    label(buf, "STREETLESS", 20, 14, 360, 0.43f, green);
+    label(buf, title, 20, 37, 360, 0.65f, ink);
+    rect(20, 70, 360, 1, border);
+    for (size_t i = 0; i < DETAIL_ROWS; ++i)
+        label(buf, lines[i], 20, 77 + i * 17, 360, 0.49f, muted);
+    if (count) {
+        label(buf, "SELECTED", 20, 169, 360, 0.35f, muted);
+        label(buf, items[selected], 20, 184, 360, 0.52f, ink);
     }
-    label(buf, "SELECTED", 20, 145, 360, 0.40f, muted);
-    label(buf, items[selected], 20, 165, 360, 0.67f, ink);
-    snprintf(position, sizeof(position), "%u / %zu", selected + 1, count);
-    label(buf, position, 20, 207, 110, 0.40f, muted);
-    label(buf, "D-PAD TO NAVIGATE", 195, 207, 185, 0.40f, muted);
+    if (pages > 1) {
+        snprintf(position, sizeof(position), "DETAILS %zu / %zu   LEFT/RIGHT", page + 1, pages);
+        label(buf, position, 20, 220, 360, 0.38f, muted);
+    } else if (count) {
+        snprintf(position, sizeof(position), "%u / %zu", selected + 1, count);
+        label(buf, position, 20, 220, 360, 0.38f, muted);
+    }
 
     C2D_TargetClear(bottom, COLOR(229, 238, 232));
     C2D_SceneBegin(bottom);
@@ -92,13 +127,10 @@ static void draw_menu(C3D_RenderTarget *top, C3D_RenderTarget *bottom,
         bool active = index == selected;
         rect(12, y, 296, 32, active ? green : white);
         if (active) rect(12, y, 4, 32, COLOR(110, 221, 174));
-        label(buf, items[index], 25, y + 6, 260, 0.55f,
-              active ? white : ink);
+        label(buf, items[index], 25, y + 6, 260, 0.55f, active ? white : ink);
     }
     rect(12, 204, 296, 1, border);
-    label(buf, allow_back ? "A Select    B Back    START Exit"
-                          : "A Select                 START Exit",
-          14, 214, 292, 0.43f, muted);
+    label(buf, footer, 14, 214, 292, 0.43f, muted);
 }
 
 static void restore_console(void) {
@@ -114,36 +146,67 @@ static void restore_console(void) {
     consoleClear();
 }
 
-static bool text_menu(const char *title, const char *status, const char *const *items,
-                      size_t count, unsigned *selected, bool allow_back) {
-    while (ui_running()) {
-        consoleClear();
-        printf("Streetless / %s\n\n%s\n\n", title, status);
-        size_t first = *selected >= VISIBLE_ROWS ? *selected - VISIBLE_ROWS + 1 : 0;
-        for (size_t i = first; i < count && i < first + VISIBLE_ROWS; ++i)
-            printf("%s %s\n", i == *selected ? ">" : " ", items[i]);
-        puts(allow_back ? "\nD-pad Select  A Open  B Back  START Exit"
-                        : "\nD-pad Select  A Open  START Exit");
-        uint32_t keys = ui_keys();
-        if (!keys || (allow_back && (keys & KEY_B))) return false;
-        if (keys & KEY_UP) *selected = *selected ? *selected - 1 : (unsigned)(count - 1);
-        else if (keys & KEY_DOWN) *selected = *selected + 1 < count ? *selected + 1 : 0;
-        else if (keys & KEY_A) return true;
+static uint32_t input_action(uint32_t keys, size_t count, unsigned *selected,
+                             size_t *page, size_t pages, uint32_t accepted) {
+    if (!keys) return 0;
+    if (keys & accepted & KEY_B) return KEY_B;
+    if (keys & accepted & KEY_A) {
+        /* For a modal confirmation, show every page before accepting. */
+        if (!count && *page + 1 < pages) { ++*page; return 0; }
+        return KEY_A;
     }
-    return false;
+    if (keys & accepted & KEY_X) return KEY_X;
+    if (keys & accepted & KEY_Y) return KEY_Y;
+    if (count && (keys & KEY_UP))
+        *selected = *selected ? *selected - 1 : (unsigned)(count - 1);
+    else if (count && (keys & KEY_DOWN))
+        *selected = *selected + 1 < count ? *selected + 1 : 0;
+    else if ((keys & KEY_LEFT) && *page) --*page;
+    else if ((keys & KEY_RIGHT) && *page + 1 < pages) ++*page;
+    return 0;
 }
 
-bool menu_ui_choose(const char *title, const char *status,
-                    const char *const *items, size_t count,
-                    unsigned *selected, bool allow_back) {
+static uint32_t text_menu(const char *title, const char *details,
+                          const char *const *items, size_t count, unsigned *selected,
+                          uint32_t accepted, const char *footer, size_t page, size_t pages) {
+    while (ui_running()) {
+        char safe[97], lines[DETAIL_ROWS][DETAIL_COLUMNS + 1];
+        detail_page(page_start(details, page), lines);
+        consoleClear();
+        clean_text(safe, sizeof(safe), title);
+        printf("Graphics unavailable / %s\n\n", safe);
+        for (size_t i = 0; i < DETAIL_ROWS; ++i) puts(lines[i]);
+        if (pages > 1) printf("Details %zu / %zu  LEFT/RIGHT\n", page + 1, pages);
+        size_t first = count && *selected >= VISIBLE_ROWS ? *selected - VISIBLE_ROWS + 1 : 0;
+        for (size_t i = first; i < count && i < first + VISIBLE_ROWS; ++i) {
+            clean_text(safe, sizeof(safe), items[i]);
+            printf("%s %s\n", i == *selected ? ">" : " ", safe);
+        }
+        clean_text(safe, sizeof(safe), footer);
+        puts(safe);
+        uint32_t keys = ui_keys();
+        if (!keys) return 0;
+        uint32_t action = input_action(keys, count, selected, &page, pages, accepted);
+        if (action) return action;
+    }
+    return 0;
+}
+
+uint32_t menu_ui_prompt(const char *title, const char *details,
+                        const char *const *items, size_t count, unsigned *selected,
+                        uint32_t accepted_keys, const char *footer) {
     C3D_RenderTarget *top = NULL, *bottom = NULL;
     C2D_TextBuf buf = NULL;
-    bool c3d = false, c2d = false, chosen = false, failed = false;
-
-    if (!items || !selected || !count || count > UINT_MAX) return false;
-    if (*selected >= count) *selected = 0;
+    bool c3d = false, c2d = false, failed = false;
+    uint32_t action = 0;
+    size_t page = 0, pages;
     static bool graphics_unavailable;
-    if (graphics_unavailable) return text_menu(title, status, items, count, selected, allow_back);
+
+    if (count > UINT_MAX || (count && (!items || !selected))) return 0;
+    if (count && *selected >= count) *selected = 0;
+    pages = page_count(details);
+    if (graphics_unavailable)
+        return text_menu(title, details, items, count, selected, accepted_keys, footer, page, pages);
     /* consoleInit uses RGB565 and single buffering. Citro2D's screen
      * targets output RGB8; reset both screens before any GPU transfer. */
     gfxSetScreenFormat(GFX_TOP, GSP_BGR8_OES);
@@ -160,15 +223,14 @@ bool menu_ui_choose(const char *title, const char *status,
 
     while (ui_running()) {
         if (!C3D_FrameBegin(C3D_FRAME_SYNCDRAW)) goto error;
-        draw_menu(top, bottom, buf, title, status, items, count, *selected, allow_back);
+        draw_menu(top, bottom, buf, title, details, items, count,
+                  count ? *selected : 0, footer, page, pages);
         C3D_FrameEnd(0);
         C3D_FrameSync();
         uint32_t keys = ui_keys();
         if (!keys) break;
-        if (keys & KEY_UP) *selected = *selected ? *selected - 1 : (unsigned)(count - 1);
-        else if (keys & KEY_DOWN) *selected = *selected + 1 < count ? *selected + 1 : 0;
-        else if (keys & KEY_A) { chosen = true; break; }
-        else if (allow_back && (keys & KEY_B)) break;
+        action = input_action(keys, count, selected, &page, pages, accepted_keys);
+        if (action) break;
     }
     goto cleanup;
 
@@ -184,8 +246,17 @@ cleanup:
     restore_console();
     if (failed && ui_running()) {
         graphics_unavailable = true;
-        ui_message("Graphical menu unavailable.\nUsing text navigation.");
-        return text_menu(title, status, items, count, selected, allow_back);
+        return text_menu(title, details, items, count, selected, accepted_keys, footer, page, pages);
     }
-    return chosen;
+    return action;
+}
+
+bool menu_ui_choose(const char *title, const char *status,
+                    const char *const *items, size_t count,
+                    unsigned *selected, bool allow_back) {
+    if (!count) return false;
+    return menu_ui_prompt(title, status, items, count, selected,
+                          KEY_A | (allow_back ? KEY_B : 0),
+                          allow_back ? "A Select    B Back    START Exit"
+                                     : "A Select    START Exit") == KEY_A;
 }

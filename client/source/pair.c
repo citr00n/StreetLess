@@ -37,6 +37,7 @@ bool pair_parse(const unsigned char *payload, size_t length, PairData *out) {
 
 #ifdef __3DS__
 #include "http.h"
+#include "menu_ui.h"
 #include "pair_store.h"
 #include "ui.h"
 #include "quirc.h"
@@ -214,11 +215,12 @@ bool pair_run(Config *config, const char *debug_pin, PairMethod method) {
         return false;
     }
     if (pending) {
-        consoleClear();
-        printf("Streetless / Pending pairing\n\n%s:%u\n\nA Retry saved claim\nX Discard saved claim\nB Cancel   START Exit\n",
-            data.config.host, (unsigned)data.config.port);
-        uint32_t keys;
-        do { keys = ui_keys(); } while (keys && !(keys & (KEY_A | KEY_B | KEY_X)));
+        char target[sizeof(data.config.host) + 8];
+        snprintf(target, sizeof(target), "%s:%u",
+                 data.config.host, (unsigned)data.config.port);
+        uint32_t keys = menu_ui_prompt("Pending pairing", target, NULL, 0, NULL,
+                                       KEY_A | KEY_B | KEY_X,
+                                       "A Retry   X Discard   B Back");
         if (!keys || (keys & KEY_B)) return false;
         if (keys & KEY_X) {
             if (ui_confirm("Discard claim", data.config.host,

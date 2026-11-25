@@ -37,22 +37,24 @@ static void wait_for_back(void) {
 }
 
 void ui_message(const char *message) {
-    consoleClear();
-    printf("Streetless\n\n%s\n\nA/B Continue   START Exit\n", message);
-    wait_for_back();
+    (void)menu_ui_prompt("Streetless", message, NULL, 0, NULL,
+                         KEY_A | KEY_B, "A/B Continue   START Exit");
 }
 
 bool ui_confirm(const char *heading, const char *target, const char *message) {
-    consoleClear();
-    printf("Streetless / %s\n\n", heading);
-    if (target) printf("%s\n\n", target);
-    printf("%s\n\nA Confirm   B Cancel   START Exit\n", message);
-    uint32_t keys;
-    while ((keys = ui_keys())) {
-        if (keys & KEY_B) return false;
-        if (keys & KEY_A) return true;
+    char combined[1024];
+    const char *details = message;
+    if (target) {
+        int length = snprintf(combined, sizeof(combined), "%s\n\n%s", target, message);
+        if (length < 0 || (size_t)length >= sizeof(combined)) {
+            ui_message("Confirmation text is too long.");
+            return false;
+        }
+        details = combined;
     }
-    return false;
+    uint32_t key = menu_ui_prompt(heading, details, NULL, 0, NULL,
+                                  KEY_A | KEY_B, "A Confirm   B Cancel   START Exit");
+    return key == KEY_A;
 }
 
 static bool enter_debug_pin(char pin[5]) {
@@ -252,10 +254,10 @@ static void run_menu(Config *config, bool valid) {
             switch ((SettingsItem)settings_selected) {
             case SETTINGS_DEBUG:
                 if (debug) {
-                    consoleClear();
-                    puts("Debug mode\n\nA Re-enter server PIN\nX Return to production HTTPS\nB Cancel");
-                    uint32_t k;
-                    do { k = ui_keys(); } while (k && !(k & (KEY_A | KEY_B | KEY_X)));
+                    uint32_t k = menu_ui_prompt("Debug mode",
+                        "Re-enter the server PIN, or return to production HTTPS.",
+                        NULL, 0, NULL, KEY_A | KEY_B | KEY_X,
+                        "A Re-enter PIN   X Production   B Cancel");
                     if (k & KEY_X) { debug = false; memset(pin, 0, sizeof(pin)); }
                     else if (k & KEY_A) { if (!enter_debug_pin(pin)) continue; }
                     else continue;

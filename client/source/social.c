@@ -1,4 +1,5 @@
 #include "social.h"
+#include "menu_ui.h"
 #include "ui.h"
 
 #include <3ds.h>
@@ -356,32 +357,14 @@ static void choice(Menu *m, Command command, int64_t id, const char *format, ...
 }
 
 static int choose(Menu *m, unsigned *selected) {
-    enum { visible = 12 };
-    unsigned current = m->count && *selected >= m->count ? m->count - 1 : *selected;
-    unsigned top = current < visible ? 0 : current - visible + 1;
-    while (ui_running()) {
-        consoleClear();
-        printf("Streetless / %s\n\n%s", m->title, m->details);
-        if (m->details_len && m->count) puts("");
-        unsigned end = top + visible < m->count ? top + visible : m->count;
-        for (unsigned i = top; i < end; ++i)
-            printf("%s %s\n", i == current ? ">" : " ", m->choices[i].label);
-        if (m->count > visible) printf("\n%u of %u\n", current + 1, m->count);
-        if (m->count) puts("\nD-pad Select   A Choose   B Back   START Exit");
-        else puts("\nB Back   START Exit");
-        uint32_t keys = ui_keys();
-        if (!keys || (keys & KEY_B)) return -1;
-        if (!m->count) continue;
-        if (keys & KEY_UP) current = current ? current - 1 : m->count - 1;
-        else if (keys & KEY_DOWN) current = (current + 1) % m->count;
-        else if (keys & KEY_A) {
-            *selected = current;
-            return (int)current;
-        } else continue;
-        if (current < top) top = current;
-        if (current >= top + visible) top = current - visible + 1;
-    }
-    return -1;
+    const char *items[1 + FRIEND_MAX];
+    for (unsigned i = 0; i < m->count; ++i) items[i] = m->choices[i].label;
+    if (m->count && *selected >= m->count) *selected = m->count - 1;
+    uint32_t key = menu_ui_prompt(m->title, m->details, m->count ? items : NULL,
+                                  m->count, m->count ? selected : NULL, KEY_A | KEY_B,
+                                  m->count ? "Up/Down: Select  Left/Right: Scroll  A: Choose  B: Back"
+                                           : "Left/Right: Scroll  B: Back  START: Exit");
+    return key == KEY_A && m->count ? (int)*selected : -1;
 }
 
 static json_t *find(json_t *list, int64_t id) {
@@ -693,6 +676,7 @@ static bool select_choice(Http *http, View *v, Choice c, json_t *data) {
 void social_open(Http *http, SocialPage page) {
     static const Screen start[] = {SCREEN_PRIVACY, SCREEN_FRIENDS, SCREEN_ROOMS, SCREEN_OUTGOING};
     View v = {.screen = start[page]};
+    unsigned selections[SCREEN_SEND + 1] = {0};
     json_t *data = NULL;
     bool refresh = true;
     bool have_stats = false;
@@ -709,12 +693,14 @@ void social_open(Http *http, SocialPage page) {
         m.details[0] = '\0';
         m.details_len = 0;
         m.count = 0;
+        v.selected = selections[v.screen];
         if (!build_menu(&m, v, data, have_stats, &stats)) {
             ui_message("That target is no longer available.");
             go_back(&v);
             continue;
         }
         int selected = choose(&m, &v.selected);
+        selections[v.screen] = v.selected;
         if (selected < 0) {
             go_back(&v);
             refresh = true;

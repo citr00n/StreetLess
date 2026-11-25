@@ -37,7 +37,7 @@ If the relay accepts pairing but the SD configuration cannot be saved, keep `pai
 
 Releases include `streetless-cia-qr.png`, which points to the release's CIA download for an installer such as FBI. The release must be publicly accessible to the console.
 
-The graphical home screen groups account pairing under **Account** and local preferences under **Settings**. Use the D-pad to navigate, **A** to open, **B** to go back and **START** to exit. Social pages and sync progress use the text interface.
+The graphical menus group account pairing under **Account** and local preferences under **Settings**. Use the D-pad to navigate, **A** to open, **B** to go back and **START** to exit. Use left/right to page through longer details; the system keyboard, camera preview and sync progress remain native screens.
 
 ### Choose outgoing games
 

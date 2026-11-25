@@ -133,6 +133,7 @@ bool selection_save(const Selection *selection) {
 
 #ifndef STREETLESS_SELECTION_HOST_TEST
 #include "cecd.h"
+#include "menu_ui.h"
 #include "title_names.h"
 #include "ui.h"
 
@@ -162,10 +163,10 @@ bool selection_menu(void) {
         return false;
     }
     if (R_FAILED(rc) || R_FAILED(rollback)) {
-        consoleClear();
-        printf("Cannot read titles (%s: %08lx; rollback: %08lx).\n", phase, (unsigned long)(u32)rc, (unsigned long)(u32)rollback);
-        puts("A/B Continue");
-        while (ui_running()) { uint32_t k = ui_keys(); if (!k || (k & (KEY_A | KEY_B))) break; }
+        char message[192];
+        snprintf(message, sizeof(message), "Cannot read titles (%s: %08lx; rollback: %08lx).",
+            phase, (unsigned long)(u32)rc, (unsigned long)(u32)rollback);
+        ui_message(message);
         return true;
     }
     if (!count) { ui_message("No native StreetPass titles found."); return true; }
@@ -177,17 +178,23 @@ bool selection_menu(void) {
         selection.initial = false;
         for (u32 i = 0; i < count; ++i) selection_set(&selection, ids[i], true);
     }
-    u32 cursor = 0;
+    unsigned cursor = 0;
     while (ui_running()) {
-        consoleClear();
-        printf("Streetless / Outgoing games\n\n%lu/%lu  %s\n%08lX  [%s]\n\n", (unsigned long)(cursor + 1), (unsigned long)count,
-            names[cursor], (unsigned long)ids[cursor], selection_allows(&selection, ids[cursor]) ? "ON" : "OFF");
-        puts("New games default OFF after saving.\nMode 0 games may not receive without\nan outgoing pass. Already staged or queued\ndata cannot be retracted here.\n\nUp/Down Choose  A Toggle\nX Save  B Cancel  START Exit");
-        uint32_t keys = ui_keys();
+        char labels[SL_TITLES][96];
+        const char *items[SL_TITLES];
+        for (u32 i = 0; i < count; ++i) {
+            snprintf(labels[i], sizeof(labels[i]), "[%s] %08lX %.63s",
+                selection_allows(&selection, ids[i]) ? "ON" : "OFF",
+                (unsigned long)ids[i], names[i]);
+            items[i] = labels[i];
+        }
+        uint32_t keys = menu_ui_prompt("Outgoing games",
+            "New games default OFF after saving.\nMode 0 games may not receive without an outgoing pass. "
+            "Already staged or queued data cannot be retracted here.",
+            items, count, &cursor, KEY_A | KEY_B | KEY_X,
+            "Up/Down Choose  A Toggle  X Save  B Cancel  START Exit");
         if (!keys || (keys & KEY_B)) break;
-        if (keys & KEY_UP) cursor = (cursor + count - 1) % count;
-        else if (keys & KEY_DOWN) cursor = (cursor + 1) % count;
-        else if (keys & KEY_A) {
+        if (keys & KEY_A) {
             if (!selection_set(&selection, ids[cursor], !selection_allows(&selection, ids[cursor])))
                 ui_message("Too many selected games; disable one first.");
         } else if (keys & KEY_X) {
