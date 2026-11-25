@@ -90,30 +90,33 @@ make -C background
 
 The outputs are `client/streetless.3dsx`, `client/streetless.cia` and `background/0004013000F5A302.cxi`. The client and module embed ISRG Root X1 by default. For a test CA, rebuild **both** with `CA_FILE=/absolute/path/to/root.pem`.
 
-To build the same pinned CIA packaging tools used in CI on an x86-64 Linux host:
+To reproduce the CI client and background build with Docker, run the following
+from the repository root. The pinned packaging tools are built and run inside
+the same pinned devkitPro container, avoiding host/container libc incompatibilities.
+The `linux/amd64` platform may require emulation on other architectures.
 
 ```sh
-D=$(mktemp -d)
-git clone https://github.com/3DSGuy/Project_CTR.git "$D/project-ctr"
-git -C "$D/project-ctr" checkout --detach d52c2b0e788c2d085763d7c5dcc4b2edd9ffb7d8
-make -C "$D/project-ctr/makerom" deps
-make -C "$D/project-ctr/makerom"
-git clone https://github.com/Epicpkmn11/bannertool.git "$D/bannertool"
-git -C "$D/bannertool" checkout --detach 51dac927a4c43de769900d91fd3cb6142295263f
-git -C "$D/bannertool" -c url.https://github.com/.insteadOf=git://github.com/ submodule update --init --recursive
-make -C "$D/bannertool"
-mkdir -p "$D/tools"
-cp "$D/project-ctr/makerom/bin/makerom" "$D/bannertool/output/linux-x86_64/bannertool" "$D/tools/"
-export STREETLESS_CIA_TOOLS="$D/tools"
-```
-
-These Linux binaries can be mounted into the matching devkitPro container:
-
-```sh
-docker run --rm --platform linux/amd64 -v "$PWD:/work" \
-  -v "$STREETLESS_CIA_TOOLS:/streetless-tools:ro" -w /work \
+docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
   devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5 \
-  sh -lc 'set -e; command -v python3 >/dev/null || (apt-get update && apt-get install -y --no-install-recommends python3); dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson; export PATH="/streetless-tools:$PATH"; make -C client; make -C background'
+  sh -eu -c '
+    apt-get update
+    apt-get install -y --no-install-recommends build-essential ca-certificates git python3 zip
+    dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson
+    git clone https://github.com/3DSGuy/Project_CTR.git /tmp/project-ctr
+    git -C /tmp/project-ctr checkout --detach d52c2b0e788c2d085763d7c5dcc4b2edd9ffb7d8
+    make -C /tmp/project-ctr/makerom deps
+    make -C /tmp/project-ctr/makerom
+    git clone https://github.com/Epicpkmn11/bannertool.git /tmp/bannertool
+    git -C /tmp/bannertool checkout --detach 51dac927a4c43de769900d91fd3cb6142295263f
+    git -C /tmp/bannertool -c url.https://github.com/.insteadOf=git://github.com/ submodule update --init --recursive
+    make -C /tmp/bannertool
+    export PATH="/tmp/project-ctr/makerom/bin:/tmp/bannertool/output/linux-x86_64:$PATH"
+    make -C client
+    make -C background
+    test -s client/streetless.3dsx
+    test -s client/streetless.cia
+    test -s background/0004013000F5A302.cxi
+  '
 ```
 
 ### Tests

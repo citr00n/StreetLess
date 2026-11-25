@@ -91,26 +91,29 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Build CIA packaging tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/streetless-tools"
-          git clone https://github.com/3DSGuy/Project_CTR.git "$RUNNER_TEMP/project-ctr"
-          git -C "$RUNNER_TEMP/project-ctr" checkout --detach d52c2b0e788c2d085763d7c5dcc4b2edd9ffb7d8
-          make -C "$RUNNER_TEMP/project-ctr/makerom" deps
-          make -C "$RUNNER_TEMP/project-ctr/makerom"
-          cp "$RUNNER_TEMP/project-ctr/makerom/bin/makerom" "$RUNNER_TEMP/streetless-tools/"
-          git clone https://github.com/Epicpkmn11/bannertool.git "$RUNNER_TEMP/bannertool"
-          git -C "$RUNNER_TEMP/bannertool" checkout --detach 51dac927a4c43de769900d91fd3cb6142295263f
-          git -C "$RUNNER_TEMP/bannertool" -c url.https://github.com/.insteadOf=git://github.com/ submodule update --init --recursive
-          make -C "$RUNNER_TEMP/bannertool"
-          cp "$RUNNER_TEMP/bannertool/output/linux-x86_64/bannertool" "$RUNNER_TEMP/streetless-tools/"
       - name: Build 3DS client and background module
         run: |
-          docker run --rm -v "$PWD:/work" -v "$RUNNER_TEMP/streetless-tools:/streetless-tools:ro" -w /work \
+          docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
             devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5 \
-            sh -lc 'set -e; command -v python3 >/dev/null || (apt-get update && apt-get install -y --no-install-recommends python3); dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson; export PATH="/streetless-tools:$PATH"; make -C client; make -C background; test -s client/streetless.3dsx; test -s client/streetless.cia; test -s background/0004013000F5A302.cxi'
+            sh -eu -c '
+              apt-get update
+              apt-get install -y --no-install-recommends build-essential ca-certificates git python3 zip
+              dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson
+              git clone https://github.com/3DSGuy/Project_CTR.git /tmp/project-ctr
+              git -C /tmp/project-ctr checkout --detach d52c2b0e788c2d085763d7c5dcc4b2edd9ffb7d8
+              make -C /tmp/project-ctr/makerom deps
+              make -C /tmp/project-ctr/makerom
+              git clone https://github.com/Epicpkmn11/bannertool.git /tmp/bannertool
+              git -C /tmp/bannertool checkout --detach 51dac927a4c43de769900d91fd3cb6142295263f
+              git -C /tmp/bannertool -c url.https://github.com/.insteadOf=git://github.com/ submodule update --init --recursive
+              make -C /tmp/bannertool
+              export PATH="/tmp/project-ctr/makerom/bin:/tmp/bannertool/output/linux-x86_64:$PATH"
+              make -C client
+              make -C background
+              test -s client/streetless.3dsx
+              test -s client/streetless.cia
+              test -s background/0004013000F5A302.cxi
+            '
       - name: Upload 3DS client artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
