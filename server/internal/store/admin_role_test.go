@@ -37,6 +37,18 @@ func TestFirstRegistrationAndGrant(t *testing.T) {
 	if err := s.db.QueryRow("SELECT sum(is_admin),sum(approved) FROM participants").Scan(&admins, &approved); err != nil || admins != 1 || approved != 1 {
 		t.Fatalf("bootstrap roles=%d approved=%d: %v", admins, approved, err)
 	}
+	var adminUsername string
+	if err := s.db.QueryRow("SELECT username FROM participants WHERE is_admin=1").Scan(&adminUsername); err != nil {
+		t.Fatal(err)
+	}
+	adminCookie, err := s.LoginPassword(ctx, adminUsername, "secure passphrase", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := s.Session(ctx, adminCookie)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var pendingID int64
 	var username string
 	if err := s.db.QueryRow("SELECT id,username FROM participants WHERE approved=0 LIMIT 1").Scan(&pendingID, &username); err != nil {
@@ -46,19 +58,19 @@ func TestFirstRegistrationAndGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.GrantAdmin(ctx, pendingID); err != ErrConflict {
+	if err := s.SetAdminRole(ctx, admin, pendingID, true); err != ErrConflict {
 		t.Fatalf("pending grant: %v", err)
 	}
-	if err := s.GrantAdmin(ctx, 99999); err != ErrNotFound {
+	if err := s.SetAdminRole(ctx, admin, 99999, true); err != ErrNotFound {
 		t.Fatalf("unknown grant: %v", err)
 	}
 	if err := s.Approve(ctx, pendingID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.GrantAdmin(ctx, pendingID); err != nil {
+	if err := s.SetAdminRole(ctx, admin, pendingID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.GrantAdmin(ctx, pendingID); err != nil {
+	if err := s.SetAdminRole(ctx, admin, pendingID, true); err != nil {
 		t.Fatal(err)
 	}
 	p, err := s.Session(ctx, cookie)
@@ -207,9 +219,6 @@ func TestLegacyRoleMigrationAndRecovery(t *testing.T) {
 	if err != nil || p.ID != 2 || p.IsAdmin {
 		t.Fatalf("legacy session: %+v %v", p, err)
 	}
-	if err := s.GrantAdmin(ctx, 1); err != ErrConflict {
-		t.Fatalf("synthetic grant: %v", err)
-	}
 	if err := s.Register(ctx, "Later", "later", "secure passphrase"); err != nil {
 		t.Fatal(err)
 	}
@@ -223,6 +232,9 @@ func TestLegacyRoleMigrationAndRecovery(t *testing.T) {
 	p, err = s.Session(ctx, userCookie)
 	if err != nil || !p.IsAdmin {
 		t.Fatalf("recovered role: %+v %v", p, err)
+	}
+	if err := s.SetAdminRole(ctx, p, 1, true); err != ErrConflict {
+		t.Fatalf("synthetic grant: %v", err)
 	}
 	if _, err := s.db.Exec("UPDATE participants SET revoked_at=? WHERE id=2", int64(1800000000)); err != nil {
 		t.Fatal(err)

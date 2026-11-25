@@ -140,12 +140,6 @@ func (s *Store) Admin(ctx context.Context, participantsBefore, roomsBefore, queu
 	return view, err
 }
 
-// GrantAdmin grants a registered active approved account the administrator role.
-func (s *Store) GrantAdmin(ctx context.Context, id int64) error {
-	return s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
-		return grantAdmin(ctx, tx, "id=?", id)
-	})
-}
 // SetAdminRole changes a role only while the actor's browser session still
 // belongs to an active administrator. Both authorization and the last-admin
 // check are performed in the same transaction as the change.
@@ -193,7 +187,6 @@ func (s *Store) SetAdminRole(ctx context.Context, actor Principal, id int64, gra
 		return nil
 	})
 }
-
 
 // BootstrapAdmin is an offline recovery operation for a database on which no
 // administrator role has ever been assigned.

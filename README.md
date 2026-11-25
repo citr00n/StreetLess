@@ -104,7 +104,9 @@ docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
     dkp-pacman --noconfirm --needed -S 3ds-dev 3ds-curl 3ds-jansson
     git clone https://github.com/3DSGuy/Project_CTR.git /tmp/project-ctr
     git -C /tmp/project-ctr checkout --detach d52c2b0e788c2d085763d7c5dcc4b2edd9ffb7d8
-    make -C /tmp/project-ctr/makerom deps
+    for lib in libmbedtls libblz libyaml; do
+      make -C "/tmp/project-ctr/makerom/deps/$lib" static_lib
+    done
     make -C /tmp/project-ctr/makerom
     git clone https://github.com/Epicpkmn11/bannertool.git /tmp/bannertool
     git -C /tmp/bannertool checkout --detach 51dac927a4c43de769900d91fd3cb6142295263f
