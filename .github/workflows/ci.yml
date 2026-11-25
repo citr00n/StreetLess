@@ -41,6 +41,8 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/title_names.c client/tests/title_names_test.c -o /tmp/streetless-title-test
           /tmp/streetless-title-test
+          cc -std=c11 -Wall -Wextra -Werror -D__3DS__ -Iclient/tests/title_stubs -Iclient/include client/source/title_names.c client/tests/title_names_3ds_test.c -o /tmp/streetless-title-3ds-test
+          /tmp/streetless-title-3ds-test
           cc -std=c11 -Wall -Wextra -Werror -DSTREETLESS_SELECTION_HOST_TEST -Iclient/include client/source/selection.c client/tests/selection_test.c -o /tmp/streetless-selection-test
           /tmp/streetless-selection-test
           cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -DSTREETLESS_SELECTION_HOST_TEST -DSTREETLESS_SELECTION_STORAGE_TEST -Iclient/include client/source/selection.c client/tests/selection_storage_test.c -o /tmp/streetless-selection-storage-test

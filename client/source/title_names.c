@@ -104,9 +104,10 @@ static bool read_icon(FS_MediaType media, uint64_t title, unsigned char *icon) {
         return false;
     u64 size = 0;
     u32 got = 0;
+    /* ExeFS rejects partial icon reads on real hardware, even aligned ones. */
     bool ok = R_SUCCEEDED(FSFILE_GetSize(file, &size)) && size == SMDH_SIZE &&
-              R_SUCCEEDED(FSFILE_Read(file, &got, 0, icon, SMDH_METADATA_SIZE)) &&
-              got == SMDH_METADATA_SIZE;
+              R_SUCCEEDED(FSFILE_Read(file, &got, 0, icon, SMDH_SIZE)) &&
+              got == SMDH_SIZE;
     FSFILE_Close(file);
     return ok;
 }
@@ -117,7 +118,7 @@ void title_names_resolve(const uint32_t *ids, size_t count, char (*names)[64]) {
     for (size_t i = 0; i < count; ++i) fallback(ids[i], names[i]);
 #ifdef __3DS__
     if (!count || count > MAX_REQUESTED_TITLES || R_FAILED(amInit())) return;
-    unsigned char *icon = malloc(SMDH_METADATA_SIZE);
+    unsigned char *icon = malloc(SMDH_SIZE);
     unsigned char *matches = calloc(count, 1);
     if (!icon || !matches) goto done;
     const FS_MediaType media[] = { MEDIATYPE_NAND, MEDIATYPE_SD, MEDIATYPE_GAME_CARD };
