@@ -47,6 +47,8 @@ Preferences are stored independently of pairing in `SD:/3ds/streetless/outgoing.
 
 The optional `0004013000F5A302.cxi` module is **experimental and unverified on physical 3DS hardware**. It requires Luma3DS 13 or newer and a production HTTPS relay. The CIA QR installs only the foreground app, not this module.
 
+The `v0.1.0-alpha.1` background module can crash at startup when allocating linear memory. Use a build containing the sysmodule heap fix instead. If the old module causes a crash, power off the console and remove its CXI before restarting.
+
 1. Copy the module to `SD:/luma/sysmodules/0004013000F5A302.cxi`. Do not overwrite an existing file with that name without checking it first.
 2. Hold **SELECT** while booting and enable **Enable loading external FIRMs and modules** in Luma's configuration.
 3. Pair the console, choose outgoing games, then select **Background sync** in Streetless and confirm the warning. Once the service reports it connected, Streetless can be closed.
@@ -142,6 +144,8 @@ cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -DSTREETLESS_SELECTI
 /tmp/streetless-selection-storage-test
 cc -std=c11 -Wall -Wextra -Werror -Ibackground/include background/source/lifecycle.c background/tests/lifecycle_test.c -o /tmp/streetless-bg-test
 /tmp/streetless-bg-test
+cc -std=c11 -Wall -Wextra -Werror -Ibackground/tests/stubs background/source/heap.c background/tests/heap_test.c -o /tmp/streetless-bg-heap-test
+/tmp/streetless-bg-heap-test
 ```
 
 GitHub Actions runs the Go and host tests, a Docker Compose HTTPS smoke test, and builds the client formats and background module. Passing CI is not a substitute for testing StreetPass, QR scanning, sleep/wake, and recovery on real hardware.

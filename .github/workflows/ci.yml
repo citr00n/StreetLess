@@ -46,6 +46,8 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror -Ibackground/include background/source/lifecycle.c background/tests/lifecycle_test.c -o /tmp/streetless-bg-test
           /tmp/streetless-bg-test
+          cc -std=c11 -Wall -Wextra -Werror -Ibackground/tests/stubs background/source/heap.c background/tests/heap_test.c -o /tmp/streetless-bg-heap-test
+          /tmp/streetless-bg-heap-test
       - name: Test client debug transport
         run: |
           sudo apt-get update
