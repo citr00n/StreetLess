@@ -33,6 +33,8 @@ The relay is independent of Pretendo; Pretendo integration is not implemented. I
 3. In your account, generate a pairing code. In Streetless, choose **Pair console**, then scan the QR code or enter the relay hostname, IPv4 address, port and code.
 4. Select **Sync** to exchange passes. Pairing codes expire after ten minutes; do not share them. Pairing a new console replaces the previous console credential.
 
+If the relay accepts pairing but the SD configuration cannot be saved, keep `pair.pending` and retry **Pair console** in the same mode. The client can finish a previously flushed matching configuration without contacting the relay, even after the code expires. If it still fails, report the displayed SD operation and `errno`; never share `pair.pending`, `config.txt` or `config.txt.tmp`, as they contain credentials.
+
 Releases include `streetless-cia-qr.png`, which points to the release's CIA download for an installer such as FBI. The release must be publicly accessible to the console.
 
 ### Choose outgoing games
@@ -130,6 +132,8 @@ cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/t
 /tmp/streetless-wire-test
 cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/pair.c client/source/config.c client/tests/pair_test.c -o /tmp/streetless-pair-test
 /tmp/streetless-pair-test
+cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -Iclient/include client/source/pair_store.c client/source/config.c client/tests/pair_store_test.c -o /tmp/streetless-pair-store-test
+/tmp/streetless-pair-store-test
 cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_debug_test.c -lcurl -o /tmp/streetless-http-test
 /tmp/streetless-http-test
 cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_ca_blob_test.c -lcurl -o /tmp/streetless-ca-test

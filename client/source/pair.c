@@ -37,6 +37,7 @@ bool pair_parse(const unsigned char *payload, size_t length, PairData *out) {
 
 #ifdef __3DS__
 #include "http.h"
+#include "pair_store.h"
 #include "ui.h"
 #include "quirc.h"
 #include <3ds.h>
@@ -53,18 +54,21 @@ bool pair_parse(const unsigned char *payload, size_t length, PairData *out) {
 
 static bool remove_file(const char *path) { return unlink(path) == 0 || errno == ENOENT; }
 
-static bool save_file(const char *tmp, const char *path, const PairData *data, bool pending, bool debug) {
-    FILE *f = fopen(tmp, "wb");
-    if (!f) return false;
-    bool ok = (!pending || fprintf(f, "%c:%s\n", debug ? 'D' : 'P', data->code) == 35) &&
-        fprintf(f, "host=%s\nipv4=%s\nport=%u\ntoken=%s\n", data->config.host,
-            data->config.ipv4, (unsigned)data->config.port, data->config.token) > 0 &&
-        fflush(f) == 0 && fsync(fileno(f)) == 0;
-    if (fclose(f) != 0) ok = false;
-    if (!ok) { remove_file(tmp); return false; }
-    /* If replacement fails, retain the flushed sibling and the pending claim. */
-    return rename(tmp, path) == 0;
+static void save_error(const char *message, const PairStoreError *error) {
+    char text[240];
+    snprintf(text, sizeof(text), "%s\nSD %s failed (errno %d).\nRetry from Pair console.",
+             message, error->step, error->error);
+    ui_message(text);
 }
+
+static bool finish_pairing(Config *config, const PairData *data) {
+    *config = data->config;
+    if (!remove_file(PAIR_TMP) || !remove_file(PAIR_PATH))
+        ui_message("Config saved, but recovery file remains.\nRemove pair.pending from SD when safe.");
+    else ui_message("Console paired. Your configuration is saved.");
+    return true;
+}
+
 
 /* 0 absent, 1 valid, -1 inaccessible or damaged: never overwrite it. */
 static int load_pending(PairData *data, bool *debug) {
@@ -225,6 +229,13 @@ bool pair_run(Config *config, const char *debug_pin) {
             ui_message("Saved pairing belongs to the other mode.\nSwitch modes to retry or discard it.");
             return false;
         }
+        PairStoreError recovery_error;
+        int recovered = pair_store_recover(CONFIG_TMP, STREETLESS_CONFIG_PATH, &data, &recovery_error);
+        if (recovered < 0) {
+            save_error("Cannot recover saved config.", &recovery_error);
+            return false;
+        }
+        if (recovered > 0) return finish_pairing(config, &data);
     } else {
         consoleClear();
         puts("Streetless / Pair console\n\nA Scan QR\nY Enter one-time code\nB Cancel   START Exit");
@@ -239,9 +250,13 @@ bool pair_run(Config *config, const char *debug_pin) {
                 "Only continue if this is your trusted server.\nPairing replaces its existing console key.")) return false;
         if (!generate_token(data.config.token)) { ui_message("Secure random generator unavailable."); return false; }
         if ((mkdir("sdmc:/3ds", 0700) != 0 && errno != EEXIST) ||
-            (mkdir("sdmc:/3ds/streetless", 0700) != 0 && errno != EEXIST) ||
-            !save_file(PAIR_TMP, PAIR_PATH, &data, true, debug_pin != NULL)) {
-            ui_message("Cannot save pairing recovery state to SD.\nNo request was sent."); return false;
+            (mkdir("sdmc:/3ds/streetless", 0700) != 0 && errno != EEXIST)) {
+            ui_message("Cannot create pairing directory on SD.\nNo request was sent."); return false;
+        }
+        PairStoreError pending_error;
+        if (!pair_store_save(PAIR_TMP, PAIR_PATH, &data, true, debug_pin != NULL, &pending_error)) {
+            save_error("Cannot save pairing recovery state.\nNo request was sent.", &pending_error);
+            return false;
         }
     }
     Http http;
@@ -261,13 +276,11 @@ bool pair_run(Config *config, const char *debug_pin) {
         ui_message(message);
         return false;
     }
-    if (!save_file(CONFIG_TMP, STREETLESS_CONFIG_PATH, &data, false, debug_pin != NULL)) {
-        ui_message("Pairing succeeded, but config save failed.\nRetry the saved claim before it expires."); return false;
+    PairStoreError config_error;
+    if (!pair_store_save(CONFIG_TMP, STREETLESS_CONFIG_PATH, &data, false, debug_pin != NULL, &config_error)) {
+        save_error("Pairing succeeded; config save failed.", &config_error);
+        return false;
     }
-    *config = data.config;
-    if (!remove_file(PAIR_TMP) || !remove_file(PAIR_PATH))
-        ui_message("Config saved, but recovery file remains.\nRemove pair.pending from SD when safe.");
-    else ui_message("Console paired. Your configuration is saved.");
-    return true;
+    return finish_pairing(config, &data);
 }
 #endif

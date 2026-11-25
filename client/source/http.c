@@ -175,6 +175,8 @@ static CURLcode probe(Http *h, long *status) {
     size_t received;
     CURLcode rc = request(h, "/v1/debug", NULL, NULL, 0, response,
                           sizeof(response), &received, status, false);
+    if (*status == 401 && (rc == CURLE_OK || rc == CURLE_WRITE_ERROR)) return CURLE_LOGIN_DENIED;
+    if (rc == CURLE_WRITE_ERROR && *status) return CURLE_WEIRD_SERVER_REPLY;
     if (rc != CURLE_OK) return rc;
     if (*status != 200 || received != sizeof(expected) - 1 ||
         memcmp(response, expected, sizeof(expected) - 1)) return CURLE_WEIRD_SERVER_REPLY;
@@ -206,7 +208,8 @@ const char *http_error(CURLcode e) {
     case CURLE_PEER_FAILED_VERIFICATION:
     case CURLE_SSL_CONNECT_ERROR:
     case CURLE_SSL_CACERT_BADFILE: return "TLS verification or handshake failed";
-    case CURLE_WEIRD_SERVER_REPLY: return "Debug probe failed; re-enter server PIN";
+    case CURLE_LOGIN_DENIED: return "Debug PIN rejected";
+    case CURLE_WEIRD_SERVER_REPLY: return "Debug probe failed; check relay and PIN";
     case CURLE_OPERATION_TIMEDOUT: return "Connection timed out";
     case CURLE_COULDNT_CONNECT: return "Cannot connect to Streetless";
     case CURLE_WRITE_ERROR: return "Server response exceeds size limit";
