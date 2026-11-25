@@ -102,13 +102,14 @@ static void draw_menu(C3D_RenderTarget *top, C3D_RenderTarget *bottom,
 }
 
 static void restore_console(void) {
-    /* Citro3D writes both screens; return the bottom screen to a neutral black
-     * and reinitialize the existing top-screen software console. */
+    /* Clear both bottom buffers: consoleInit also swaps the bottom screen. */
     u16 width, height;
-    u8 *fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &width, &height);
-    if (fb) memset(fb, 0, (size_t)width * height * 3);
-    gfxFlushBuffers();
-    gfxScreenSwapBuffers(GFX_BOTTOM, false);
+    for (unsigned i = 0; i < 2; ++i) {
+        u8 *fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &width, &height);
+        if (fb) memset(fb, 0, (size_t)width * height * 3);
+        gfxFlushBuffers();
+        gfxScreenSwapBuffers(GFX_BOTTOM, false);
+    }
     consoleInit(GFX_TOP, NULL);
     consoleClear();
 }
@@ -143,6 +144,12 @@ bool menu_ui_choose(const char *title, const char *status,
     if (*selected >= count) *selected = 0;
     static bool graphics_unavailable;
     if (graphics_unavailable) return text_menu(title, status, items, count, selected, allow_back);
+    /* consoleInit uses RGB565 and single buffering. Citro2D's screen
+     * targets output RGB8; reset both screens before any GPU transfer. */
+    gfxSetScreenFormat(GFX_TOP, GSP_BGR8_OES);
+    gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
+    gfxSetDoubleBuffering(GFX_TOP, true);
+    gfxSetDoubleBuffering(GFX_BOTTOM, true);
     if (!(c3d = C3D_Init(C3D_DEFAULT_CMDBUF_SIZE))) goto error;
     if (!(c2d = C2D_Init(C2D_DEFAULT_MAX_OBJECTS))) goto error;
     C2D_Prepare();

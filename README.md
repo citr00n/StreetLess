@@ -150,6 +150,8 @@ cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -Iclient/include cli
 /tmp/streetless-pair-store-test
 cc -std=c11 -Wall -Wextra -Werror -D__3DS__ -Iclient/tests/stubs -Iclient/include client/source/sd_replace.c client/tests/sd_replace_test.c -o /tmp/streetless-sd-replace-test
 /tmp/streetless-sd-replace-test
+cc -std=c11 -Wall -Wextra -Werror -Iclient/tests/menu_stubs -Iclient/include client/source/menu_ui.c client/tests/menu_ui_test.c -o /tmp/streetless-menu-test
+/tmp/streetless-menu-test
 cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_debug_test.c -lcurl -o /tmp/streetless-http-test
 /tmp/streetless-http-test
 cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/http.c client/tests/http_ca_blob_test.c -lcurl -o /tmp/streetless-ca-test
