@@ -62,13 +62,15 @@ static uint64_t now_ns(void) {
         (tick % frequency) * UINT64_C(1000000000) / frequency;
 }
 
-static void arm_timer(Handle timer, const BgLifecycle *bg) {
-    svcCancelTimer(timer);
-    svcClearTimer(timer);
+static void arm_timer(Handle timer, BgLifecycle *bg) {
+    Result cancelled = svcCancelTimer(timer);
+    Result cleared = svcClearTimer(timer);
+    if (R_FAILED(cancelled) || R_FAILED(cleared)) bg->error = true;
     if (bg->active || bg->paused || bg->stopping || bg->restore_failed) return;
     uint64_t now = now_ns();
     uint64_t wait = bg->next_sync > now ? bg->next_sync - now : 1;
-    svcSetTimer(timer, wait > INT64_MAX ? INT64_MAX : (s64)wait, 0);
+    if (R_FAILED(svcSetTimer(timer, wait > INT64_MAX ? INT64_MAX : (s64)wait, 0)))
+        bg->error = true;
 }
 
 static void reply_status(unsigned state) {
