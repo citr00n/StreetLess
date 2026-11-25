@@ -13,8 +13,6 @@
 
 /* Do not initialize APT, graphics or HID in a system process. */
 void __appInit(void) { srvInit(); }
-u32 __ctru_heap_size = 8 * 1024 * 1024;
-u32 __ctru_linear_heap_size = 0x1000;
 void __appExit(void) { srvExit(); }
 
 extern const unsigned char _binary_build_romfs_certs_pem_start[];

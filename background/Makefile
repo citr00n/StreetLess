@@ -11,7 +11,7 @@ CURL_LIBS = $(shell $(PORT)/bin/curl-config --libs)
 CA_FILE ?= ../client/romfs/certs.pem
 TARGET := 0004013000F5A302
 CLIENT_SOURCES := config http sync cecd journal wire selection
-OBJECTS := build/main.o build/lifecycle.o build/ca.o $(addprefix build/client-,$(addsuffix .o,$(CLIENT_SOURCES)))
+OBJECTS := build/main.o build/heap.o build/lifecycle.o build/ca.o $(addprefix build/client-,$(addsuffix .o,$(CLIENT_SOURCES)))
 
 .PHONY: all clean force
 all: $(TARGET).cxi
