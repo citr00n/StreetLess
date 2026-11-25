@@ -73,6 +73,99 @@ func TestFirstRegistrationAndGrant(t *testing.T) {
 	}
 }
 
+func TestRemoveAdminRole(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	ctx := context.Background()
+	for _, name := range []string{"first", "second"} {
+		if err := s.Register(ctx, name, name, "secure passphrase"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	firstCookie, err := s.LoginPassword(ctx, "first", "secure passphrase", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCookie, err := s.LoginPassword(ctx, "second", "secure passphrase", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Session(ctx, firstCookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Session(ctx, secondCookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAdminRole(ctx, first, first.ID, false); err != ErrConflict {
+		t.Fatalf("last admin removal: %v", err)
+	}
+	if err := s.SetAdminRole(ctx, first, second.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	second, err = s.Session(ctx, secondCookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for _, p := range []Principal{first, second} {
+		wg.Add(1)
+		go func(p Principal) {
+			defer wg.Done()
+			results <- s.SetAdminRole(ctx, p, p.ID, false)
+		}(p)
+	}
+	wg.Wait()
+	close(results)
+	success, conflict := 0, 0
+	for err := range results {
+		switch err {
+		case nil:
+			success++
+		case ErrConflict:
+			conflict++
+		default:
+			t.Fatalf("concurrent removal: %v", err)
+		}
+	}
+	if success != 1 || conflict != 1 {
+		t.Fatalf("concurrent removals: success=%d conflict=%d", success, conflict)
+	}
+	firstNow, err := s.Session(ctx, firstCookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondNow, err := s.Session(ctx, secondCookie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, former := firstNow, first
+	if !firstNow.IsAdmin {
+		admin, former = secondNow, first
+	} else {
+		former = second
+	}
+	if err := s.SetAdminRole(ctx, former, former.ID, true); err != ErrForbidden {
+		t.Fatalf("stale actor granted role: %v", err)
+	}
+	if err := s.SetAdminRole(ctx, former, admin.ID, false); err != ErrForbidden {
+		t.Fatalf("stale actor removed role: %v", err)
+	}
+	if err := s.SetAdminRole(ctx, admin, former.ID, true); err != nil {
+		t.Fatalf("regrant: %v", err)
+	}
+	if err := s.Revoke(ctx, former.ID); err != ErrConflict {
+		t.Fatalf("revoked administrator: %v", err)
+	}
+	if err := s.SetAdminRole(ctx, admin, former.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Revoke(ctx, former.ID); err != nil {
+		t.Fatalf("revoke former administrator: %v", err)
+	}
+}
+
 func TestLegacyRoleMigrationAndRecovery(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "legacy.db")

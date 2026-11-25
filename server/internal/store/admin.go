@@ -146,6 +146,54 @@ func (s *Store) GrantAdmin(ctx context.Context, id int64) error {
 		return grantAdmin(ctx, tx, "id=?", id)
 	})
 }
+// SetAdminRole changes a role only while the actor's browser session still
+// belongs to an active administrator. Both authorization and the last-admin
+// check are performed in the same transaction as the change.
+func (s *Store) SetAdminRole(ctx context.Context, actor Principal, id int64, grant bool) error {
+	return s.mutate(ctx, func(tx *sql.Tx, now int64) error {
+		if actor.session == nil {
+			return ErrForbidden
+		}
+		if err := active(ctx, tx, actor, now); err != nil {
+			return err
+		}
+		var isAdmin bool
+		if err := tx.QueryRowContext(ctx, "SELECT is_admin FROM participants WHERE id=?", actor.ID).Scan(&isAdmin); err != nil {
+			return err
+		}
+		if !isAdmin {
+			return ErrForbidden
+		}
+		if grant {
+			return grantAdmin(ctx, tx, "id=?", id)
+		}
+		var targetAdmin bool
+		err := tx.QueryRowContext(ctx, "SELECT is_admin FROM participants WHERE id=? AND revoked_at IS NULL", id).Scan(&targetAdmin)
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if !targetAdmin {
+			return nil
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE participants SET is_admin=0 WHERE id=? AND is_admin=1
+			AND (SELECT count(*) FROM participants WHERE is_admin=1 AND revoked_at IS NULL)>1`, id)
+		if err != nil {
+			return err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if changed == 0 {
+			return ErrConflict
+		}
+		return nil
+	})
+}
+
 
 // BootstrapAdmin is an offline recovery operation for a database on which no
 // administrator role has ever been assigned.

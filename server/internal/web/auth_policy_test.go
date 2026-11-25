@@ -138,6 +138,30 @@ func TestAdminIsAlsoParticipant(t *testing.T) {
 	if !bytes.Contains(get("/me", user, 200), []byte(`href="/admin"`)) {
 		t.Fatal("granted role not reflected in existing session")
 	}
+	remove := func(id string, cookie *http.Cookie, requestOrigin string, values url.Values, status int) {
+		r := request(t, f, "POST", "/admin/participants/"+id+"/remove-admin", "application/x-www-form-urlencoded", requestOrigin, "", []byte(values.Encode()))
+		r.AddCookie(cookie)
+		send(t, f, r, status)
+	}
+	if !bytes.Contains(get("/admin", admin, 200), []byte(`/admin/participants/2/remove-admin`)) {
+		t.Fatal("remove administrator control missing")
+	}
+	remove("2", admin, "https://wrong.test", confirm, 403)
+	remove("2", admin, origin, url.Values{}, 400)
+	remove("2", admin, origin, confirm, 303)
+	get("/admin", user, 403)
+	if bytes.Contains(get("/me", user, 200), []byte(`href="/admin"`)) {
+		t.Fatal("removed role still visible in existing session")
+	}
+	remove("1", user, origin, confirm, 403)
+	grant(user, origin, confirm, 403)
+	remove("1", admin, origin, confirm, 409)
+	grant(admin, origin, confirm, 303)
+	get("/admin", user, 200)
+	remove("1", admin, origin, confirm, 303)
+	get("/admin", admin, 403)
+	get("/me", admin, 200)
+	remove("2", user, origin, confirm, 409)
 	r := request(t, f, "POST", "/me/pair/new", "application/x-www-form-urlencoded", origin, "", nil)
 	r.AddCookie(admin)
 	body, _ := send(t, f, r, 200)

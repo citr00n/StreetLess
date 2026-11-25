@@ -174,7 +174,35 @@ func (s *server) adminRevoke(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) adminGrant(w http.ResponseWriter, r *http.Request) {
-	s.adminMutation(w, r, s.db.GrantAdmin)
+	s.adminRole(w, r, true)
+}
+
+func (s *server) adminRemove(w http.ResponseWriter, r *http.Request) {
+	s.adminRole(w, r, false)
+}
+
+func (s *server) adminRole(w http.ResponseWriter, r *http.Request, grant bool) {
+	id, status := adminConfirm(w, r)
+	if status == 0 {
+		actor, ok := s.session(w, r)
+		if !ok {
+			return
+		}
+		status = storeStatus(s.db.SetAdminRole(r.Context(), actor, id, grant))
+	}
+	if status == http.StatusForbidden || status == http.StatusUnauthorized {
+		http.Error(w, statusMessage(status), status)
+		return
+	}
+	if status != 0 {
+		msg := ""
+		if status == http.StatusConflict && !grant {
+			msg = "The last active administrator cannot be removed."
+		}
+		s.adminError(w, r, status, msg)
+		return
+	}
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
 
 func (s *server) adminClose(w http.ResponseWriter, r *http.Request) {
