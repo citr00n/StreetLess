@@ -1,6 +1,5 @@
 {{define "login"}}{{template "head" .}}
-<section class="narrow card"><h1>Вход в личный кабинет</h1>
-<form method="post" action="/login"><label>Имя пользователя<input name="username" required autocomplete="username"></label><label>Пароль<input type="password" name="password" required autocomplete="current-password"></label><button type="submit">Войти</button></form>
-<p><a href="/register">Создать учётную запись</a></p><h2>Вход по прежнему веб-ключу</h2><p>Используйте веб-ключ из приглашения, а не токен из <code>config.txt</code>.</p>
-<form method="post" action="/login"><label>Веб-ключ<input class="mono" type="password" name="code" pattern="[a-f0-9]{64}" minlength="64" maxlength="64" required autocomplete="off" spellcheck="false"></label><button type="submit">Войти по веб-ключу</button></form></section>
+<section class="narrow card"><h1>Log in</h1>
+<form method="post" action="/login"><label>Username<input name="username" required autocomplete="username"></label><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button type="submit">Log in</button></form>
+<p><a href="/register">Create an account</a></p></section>
 {{template "foot" .}}{{end}}

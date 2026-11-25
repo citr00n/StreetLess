@@ -19,7 +19,9 @@ func TestApprovalModeHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := s.SetRegistration(t.Context(), "approval"); err != nil { t.Fatal(err) }
+	if err := s.SetRegistration(t.Context(), "approval"); err != nil {
+		t.Fatal(err)
+	}
 	var handler http.Handler
 	f := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
 	host, port, _ := strings.Cut(f.Listener.Addr().String(), ":")
@@ -57,7 +59,9 @@ func TestApprovalModeHTTP(t *testing.T) {
 	}
 	do("/me/pair/new", url.Values{}, cookie, false, 401)
 	accounts, err := s.PendingAccounts(t.Context())
-	if err != nil || len(accounts) != 1 { t.Fatalf("pending accounts: %+v, %v", accounts, err) }
+	if err != nil || len(accounts) != 1 {
+		t.Fatalf("pending accounts: %+v, %v", accounts, err)
+	}
 	approve := "/admin/participants/" + strconv.FormatInt(accounts[0].ID, 10) + "/approve"
 	do(approve, url.Values{"confirm": {"yes"}}, nil, false, 303)
 	do(approve, url.Values{"confirm": {"yes"}}, nil, true, 303)

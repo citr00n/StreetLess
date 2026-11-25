@@ -236,7 +236,6 @@ func (s *Store) Session(ctx context.Context, cookie string) (Principal, error) {
 	return p, err
 }
 
-
 func (s *Store) Logout(ctx context.Context, cookie string) error {
 	hash, ok := secretHash(cookie)
 	if !ok {
@@ -262,7 +261,6 @@ func ValidLabel(label string) bool {
 	}
 	return true
 }
-
 
 func (s *Store) Revoke(ctx context.Context, id int64) error {
 	return s.mutate(ctx, func(tx *sql.Tx, now int64) error {

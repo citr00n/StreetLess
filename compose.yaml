@@ -13,7 +13,6 @@ services:
     environment:
       STREETLESS_ORIGIN: "${STREETLESS_ORIGIN:?Set the public HTTPS origin}"
       STREETLESS_PUBLIC_IPV4: "${STREETLESS_PUBLIC_IPV4:?Set the public IPv4 address}"
-      STREETLESS_REGISTRATION: "${STREETLESS_REGISTRATION:-open}"
       STREETLESS_TRANSPORT: direct
       STREETLESS_LISTEN: 0.0.0.0:8443
       STREETLESS_ADMIN_HASH_FILE: /data/admin.sha256

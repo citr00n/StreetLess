@@ -15,6 +15,10 @@ The client exchanges native game data over HTTPS/TCP, with an explicit relay IPv
 
 A pairing code is temporary and can be claimed only by one console. Pairing again replaces the previous 3DS credential. The client verifies HTTPS certificates and does not fall back to plaintext. A QR image or code is sensitive until it expires: do not post it publicly or send it to an untrusted device.
 
+Account passwords must be 8–128 UTF-8 bytes. Common passwords and trivial repeated or sequential patterns are rejected; this filter cannot guarantee a strong password, so use a unique password or passphrase. Browser sessions expire after 24 hours.
+
+The former web-key login has been removed. An administrator can set a username and password for an existing participant from the dashboard; this invalidates that participant's existing browser sessions without changing the 3DS credential.
+
 ## Running a relay
 
 Build the Docker image from the repository root:
@@ -47,7 +51,6 @@ Set the public options on the Docker host. Replace the domain and example IPv4 w
 export STREETLESS_ORIGIN=https://streetless.example.org
 export STREETLESS_PUBLIC_IPV4=203.0.113.10
 export STREETLESS_DATA="$HOME/.local/share/streetless"
-export STREETLESS_REGISTRATION=open  # use approval to require admin approval
 ```
 
 `STREETLESS_ORIGIN` is the public HTTPS origin, without a path or trailing slash. Include a non-default public port, for example `https://streetless.example.org:8443`; omit `:443`. The public IPv4 and origin are used for 3DS pairing and must be reachable by the console.
@@ -66,7 +69,7 @@ docker run -d --name streetless --restart unless-stopped \
   --mount "type=bind,src=$STREETLESS_DATA,dst=/data" \
   --mount "type=bind,src=$TLS_CERT,dst=/tls/fullchain.pem,readonly" \
   --mount "type=bind,src=$TLS_KEY,dst=/tls/privkey.pem,readonly" \
-  -e STREETLESS_ORIGIN -e STREETLESS_PUBLIC_IPV4 -e STREETLESS_REGISTRATION \
+  -e STREETLESS_ORIGIN -e STREETLESS_PUBLIC_IPV4 \
   -e STREETLESS_TRANSPORT=direct -e STREETLESS_LISTEN=0.0.0.0:8443 \
   -e STREETLESS_ADMIN_HASH_FILE=/data/admin.sha256 \
   -e STREETLESS_TLS_CERT=/tls/fullchain.pem -e STREETLESS_TLS_KEY=/tls/privkey.pem \
@@ -100,7 +103,7 @@ export STREETLESS_ORIGIN=https://streetless.example.org
 docker run -d --name streetless --restart unless-stopped --network host \
   --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
   --mount "type=bind,src=$STREETLESS_DATA,dst=/data" \
-  -e STREETLESS_ORIGIN -e STREETLESS_PUBLIC_IPV4 -e STREETLESS_REGISTRATION \
+  -e STREETLESS_ORIGIN -e STREETLESS_PUBLIC_IPV4 \
   -e STREETLESS_TRANSPORT=proxy -e STREETLESS_LISTEN=127.0.0.1:8080 \
   -e STREETLESS_ADMIN_HASH_FILE=/data/admin.sha256 \
   streetless:local
@@ -149,7 +152,7 @@ Preserve the public `Host` header and mount Streetless at the root of its own or
 
 ### Verify and operate
 
-Open `https://streetless.example.org/healthz` (include the port if not 443); a healthy server returns `ok`. The website is at `/`, the account dashboard at `/me`, and the admin dashboard at `/admin` (HTTP Basic user `admin`, password in `admin-password.txt`). In approval mode, approve registrations in the admin dashboard. Revocation cannot recall a pass already committed on a console.
+Open `https://streetless.example.org/healthz` (include the port if not 443); a healthy server returns `ok`. The website is at `/` and the account dashboard at `/me`. Sign in at `/login` as `admin` using the password in `admin-password.txt` to access the admin dashboard. Registration is open by default; an administrator can require approval in dashboard settings and approve pending registrations there. Revocation cannot recall a pass already committed on a console.
 
 Use `docker logs streetless` to inspect startup errors and `docker stop streetless` to stop the server. To change configuration, remove the stopped container and run the appropriate command again; the data directory remains intact. In direct mode, restart the container after renewing the mounted certificate files. In proxy mode, reload the proxy after renewing its certificate.
 
@@ -177,5 +180,7 @@ A test pass expires after 24 hours, does not generate an automatic return pass a
 - From the repository root: `cc -std=c11 -Wall -Wextra -Werror -Iclient/include client/source/wire.c client/tests/wire_test.c -o /tmp/streetless-wire-test && /tmp/streetless-wire-test`.
 - GitHub Actions runs the Go tests and vet, the native wire and pairing tests, a Docker Compose HTTPS smoke test, and builds both 3DS client variants on pushes and pull requests. After the tests and builds pass, download both `.3dsx` files from the workflow run's `streetless-3ds` artifact.
 - Verify QR scanning, pairing and StreetPass delivery on real 3DS hardware. A successful server test or cross-compilation is not hardware proof.
+
+Version tags such as `v1.2.3` or `v1.2.3-rc.1` publish both 3DS builds to a GitHub Release and the relay image to `ghcr.io/<owner>/<repository>:<tag>` (owner and repository are lowercase). Prerelease tags create prereleases; no `latest` tag is published.
 
 CECD wrappers are derived from [NetPass](https://gitlab.com/3ds-netpass/netpass) and retain their copyright notices. The code is distributed under GPL-3.0-or-later; see [LICENSE](LICENSE). Do not copy NetPass artwork or sound assets without satisfying their separate license.

@@ -76,7 +76,9 @@ func TestApprovalAndPairExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err = s.SetRegistration(t.Context(), "approval"); err != nil { t.Fatal(err) }
+	if err = s.SetRegistration(t.Context(), "approval"); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.Register(t.Context(), "Pending", "pending_1", "long secure password"); err != nil {
 		t.Fatal(err)
 	}

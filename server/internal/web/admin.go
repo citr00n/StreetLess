@@ -157,7 +157,6 @@ func (s *server) adminCredentials(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
 
-
 func adminConfirm(w http.ResponseWriter, r *http.Request) (int64, int) {
 	id, ok := positiveID(r.PathValue("id"))
 	if !ok {
@@ -169,7 +168,6 @@ func adminConfirm(w http.ResponseWriter, r *http.Request) (int64, int) {
 	}
 	return id, status
 }
-
 
 func (s *server) adminRevoke(w http.ResponseWriter, r *http.Request) {
 	s.adminMutation(w, r, s.db.Revoke)

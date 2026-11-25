@@ -110,16 +110,27 @@ func (s *Store) LoginAdmin(ctx context.Context, oldCookie string) (string, error
 			return err
 		}
 		if old, ok := secretHash(oldCookie); ok {
-			if _, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", old); err != nil { return err }
-			if _, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", old); err != nil { return err }
+			if _, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", old); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", old); err != nil {
+				return err
+			}
 		}
 		for {
 			value, hash := makeSecret()
 			result, err := tx.ExecContext(ctx, "INSERT INTO admin_sessions VALUES(?,?) ON CONFLICT DO NOTHING", hash, now+day)
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			n, err := result.RowsAffected()
-			if err != nil { return err }
-			if n != 0 { cookie = value; return nil }
+			if err != nil {
+				return err
+			}
+			if n != 0 {
+				cookie = value
+				return nil
+			}
 		}
 	})
 	return cookie, err
@@ -151,10 +162,13 @@ func validUsername(username string) bool {
 	}
 	return true
 }
+
 // The deterministic filter rejects common passwords, short repeated patterns,
 // and straight ASCII letter or digit sequences; it cannot guarantee strength.
 func validPassword(password string) bool {
-	if len(password) < 8 || len(password) > 128 || !utf8.ValidString(password) { return false }
+	if len(password) < 8 || len(password) > 128 || !utf8.ValidString(password) {
+		return false
+	}
 	lower := strings.ToLower(password)
 	switch lower {
 	case "password", "password1", "password123", "12345678", "123456789", "1234567890", "qwertyuiop", "qwerty123", "letmein123", "iloveyou", "admin123", "welcome123":
@@ -162,19 +176,32 @@ func validPassword(password string) bool {
 	}
 	runes := []rune(lower)
 	for size := 1; size <= 4 && size <= len(runes)/2; size++ {
-		if len(runes)%size != 0 { continue }
+		if len(runes)%size != 0 {
+			continue
+		}
 		repeated := true
 		for i := size; i < len(runes); i++ {
-			if runes[i] != runes[i%size] { repeated = false; break }
+			if runes[i] != runes[i%size] {
+				repeated = false
+				break
+			}
 		}
-		if repeated { return false }
+		if repeated {
+			return false
+		}
 	}
 	ascending, descending := true, true
 	for i, r := range runes {
-		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9') { ascending, descending = false, false; break }
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9') {
+			ascending, descending = false, false
+			break
+		}
 		if i > 0 {
-			ascending = ascending && r == runes[i-1]+1
-			descending = descending && r == runes[i-1]-1
+			prev := runes[i-1]
+			digitWrap := prev >= '0' && prev <= '9' && r >= '0' && r <= '9'
+			letterWrap := prev >= 'a' && prev <= 'z' && r >= 'a' && r <= 'z'
+			ascending = ascending && (r == prev+1 || digitWrap && prev == '9' && r == '0' || letterWrap && prev == 'z' && r == 'a')
+			descending = descending && (r == prev-1 || digitWrap && prev == '0' && r == '9' || letterWrap && prev == 'a' && r == 'z')
 		}
 	}
 	return !ascending && !descending
@@ -185,20 +212,36 @@ func passwordHash(password string, salt []byte) []byte {
 
 func (s *Store) SetCredentials(ctx context.Context, id int64, username, password string) error {
 	username = normalizeUsername(username)
-	if !validUsername(username) || username == "admin" || !validPassword(password) { return ErrConflict }
+	if !validUsername(username) || username == "admin" || !validPassword(password) {
+		return ErrConflict
+	}
 	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil { return err }
+	if _, err := rand.Read(salt); err != nil {
+		return err
+	}
 	hash := passwordHash(password, salt)
 	return s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
 		var revoked sql.NullInt64
 		err := tx.QueryRowContext(ctx, "SELECT revoked_at FROM participants WHERE id=?", id).Scan(&revoked)
-		if errors.Is(err, sql.ErrNoRows) { return ErrNotFound }
-		if err != nil { return err }
-		if revoked.Valid { return ErrConflict }
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if revoked.Valid {
+			return ErrConflict
+		}
 		var taken bool
-		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM participants WHERE username=? AND id<>?)", username, id).Scan(&taken); err != nil { return err }
-		if taken { return ErrConflict }
-		if _, err := tx.ExecContext(ctx, "UPDATE participants SET username=?,password_salt=?,password_hash=? WHERE id=?", username, salt, hash, id); err != nil { return err }
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM participants WHERE username=? AND id<>?)", username, id).Scan(&taken); err != nil {
+			return err
+		}
+		if taken {
+			return ErrConflict
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE participants SET username=?,password_salt=?,password_hash=? WHERE id=?", username, salt, hash, id); err != nil {
+			return err
+		}
 		_, err = tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE participant_id=?", id)
 		return err
 	})
@@ -257,7 +300,9 @@ func createSession(ctx context.Context, tx *sql.Tx, id int64, oldCookie string, 
 		if _, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", old); err != nil {
 			return "", err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", old); err != nil { return "", err }
+		if _, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", old); err != nil {
+			return "", err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM web_sessions WHERE participant_id=? AND (expires_at<=? OR session_hash IN (SELECT session_hash FROM web_sessions WHERE participant_id=? AND expires_at>? ORDER BY expires_at DESC,session_hash DESC LIMIT -1 OFFSET 7))`, id, now, id, now); err != nil {
 		return "", err

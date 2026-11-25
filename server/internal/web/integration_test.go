@@ -54,7 +54,7 @@ func syncRequest() []byte {
 }
 
 type testCredentials struct {
-	ID int64
+	ID                        int64
 	Token, Username, Password string
 }
 
@@ -67,18 +67,30 @@ func setup(t *testing.T) (*store.Store, testCredentials, testCredentials) {
 	t.Cleanup(func() { s.Close() })
 	create := func(label string) testCredentials {
 		c := testCredentials{Username: "test_" + label, Password: "secure passphrase"}
-		if err := s.Register(t.Context(), label, c.Username, c.Password); err != nil { t.Fatal(err) }
+		if err := s.Register(t.Context(), label, c.Username, c.Password); err != nil {
+			t.Fatal(err)
+		}
 		cookie, err := s.LoginPassword(t.Context(), c.Username, c.Password, "")
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		p, err := s.Session(t.Context(), cookie)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		c.ID = p.ID
 		code, err := s.NewPairing(t.Context(), p)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		var token [32]byte
-		if _, err := rand.Read(token[:]); err != nil { t.Fatal(err) }
+		if _, err := rand.Read(token[:]); err != nil {
+			t.Fatal(err)
+		}
 		c.Token = hex.EncodeToString(token[:])
-		if err := s.ClaimPairing(t.Context(), code, c.Token); err != nil { t.Fatal(err) }
+		if err := s.ClaimPairing(t.Context(), code, c.Token); err != nil {
+			t.Fatal(err)
+		}
 		return c
 	}
 	a, b := create("A"), create("B")
@@ -150,7 +162,7 @@ func send(t *testing.T, f *httptest.Server, r *http.Request, status int) ([]byte
 func TestAdminTestDelivery(t *testing.T) {
 	s, a, b := setup(t)
 	f, origin := edge(t, s, true)
-	_, login := send(t, f, request(t, f, "POST", "/login", "application/x-www-form-urlencoded", origin, "", []byte(url.Values{"username":{"admin"}, "password":{testAdmin}}.Encode())), 303)
+	_, login := send(t, f, request(t, f, "POST", "/login", "application/x-www-form-urlencoded", origin, "", []byte(url.Values{"username": {"admin"}, "password": {testAdmin}}.Encode())), 303)
 	adminCookie := login.Cookies()[0]
 	payload := fixture()
 	upload := func(origin string, auth bool, p []byte, status int) {
