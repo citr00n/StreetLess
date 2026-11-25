@@ -78,7 +78,7 @@ func Open(path string, now func() time.Time) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	err = s.mutate(ctx, func(tx *sql.Tx, _ int64) error {
+	err = s.mutate(ctx, func(tx *sql.Tx, now int64) error {
 		var version int
 		if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 			return err
@@ -98,9 +98,26 @@ func Open(path string, now func() time.Time) (*Store, error) {
 			if _, err := tx.ExecContext(ctx, migrationV3); err != nil {
 				return err
 			}
-			_, err := tx.ExecContext(ctx, "UPDATE web_sessions SET expires_at=MIN(expires_at, ?)", s.now().Unix()+day)
-			return err
+			if _, err := tx.ExecContext(ctx, "UPDATE web_sessions SET expires_at=MIN(expires_at, ?)", s.now().Unix()+day); err != nil {
+				return err
+			}
+			fallthrough
 		case 3:
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE administrator_account (
+				id INTEGER PRIMARY KEY CHECK(id=1),
+				participant_id INTEGER NOT NULL UNIQUE REFERENCES participants(id)
+			); PRAGMA user_version=4;`); err != nil {
+				return err
+			}
+			var hasAdminSessions bool
+			if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM admin_sessions WHERE expires_at>?)", now).Scan(&hasAdminSessions); err != nil {
+				return err
+			}
+			if hasAdminSessions {
+				return ensureAdminParticipant(ctx, tx, now)
+			}
+			return nil
+		case 4:
 			return nil
 		default:
 			return fmt.Errorf("unsupported SQLite schema version %d", version)
@@ -144,7 +161,11 @@ func active(ctx context.Context, tx *sql.Tx, p Principal, now int64) error {
 	if p.session != nil {
 		// The session is rechecked in the write transaction, so a reset/logout
 		// racing a browser action can't leave the old credential usable.
-		query += " AND EXISTS(SELECT 1 FROM web_sessions WHERE participant_id=participants.id AND session_hash=? AND expires_at>?)"
+		if p.IsAdmin {
+			query += " AND EXISTS(SELECT 1 FROM admin_sessions s JOIN administrator_account a ON a.participant_id=participants.id WHERE s.session_hash=? AND s.expires_at>?)"
+		} else {
+			query += " AND EXISTS(SELECT 1 FROM web_sessions WHERE participant_id=participants.id AND session_hash=? AND expires_at>?)"
+		}
 		args = append(args, p.session, now)
 	}
 	err := tx.QueryRowContext(ctx, query, args...).Scan(&id)
@@ -201,9 +222,11 @@ func (s *Store) Session(ctx context.Context, cookie string) (Principal, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT p.id FROM web_sessions w JOIN participants p ON p.id=w.participant_id
 		WHERE w.session_hash=? AND w.expires_at>? AND p.revoked_at IS NULL`, hash, s.now().Unix()).Scan(&p.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		err = s.db.QueryRowContext(ctx, "SELECT 1 FROM admin_sessions WHERE session_hash=? AND expires_at>?", hash, s.now().Unix()).Scan(&p.ID)
+		err = s.db.QueryRowContext(ctx, `SELECT p.id FROM admin_sessions s
+			JOIN administrator_account a ON a.id=1
+			JOIN participants p ON p.id=a.participant_id
+			WHERE s.session_hash=? AND s.expires_at>? AND p.revoked_at IS NULL`, hash, s.now().Unix()).Scan(&p.ID)
 		if err == nil {
-			p.ID = 0
 			p.IsAdmin = true
 		}
 	}
@@ -243,6 +266,13 @@ func ValidLabel(label string) bool {
 
 func (s *Store) Revoke(ctx context.Context, id int64) error {
 	return s.mutate(ctx, func(tx *sql.Tx, now int64) error {
+		var administrator bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM administrator_account WHERE participant_id=?)", id).Scan(&administrator); err != nil {
+			return err
+		}
+		if administrator {
+			return ErrConflict
+		}
 		var revoked sql.NullInt64
 		err := tx.QueryRowContext(ctx, "SELECT revoked_at FROM participants WHERE id=?", id).Scan(&revoked)
 		if errors.Is(err, sql.ErrNoRows) {

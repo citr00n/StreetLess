@@ -56,7 +56,10 @@ func TestApprovalModeHTTP(t *testing.T) {
 		t.Fatalf("pending page missing: %s", pending)
 	}
 	do("/me/pair/new", url.Values{}, cookie, false, 401)
-	do("/admin/participants/1/approve", url.Values{"confirm": {"yes"}}, nil, false, 303)
-	do("/admin/participants/1/approve", url.Values{"confirm": {"yes"}}, nil, true, 303)
+	accounts, err := s.PendingAccounts(t.Context())
+	if err != nil || len(accounts) != 1 { t.Fatalf("pending accounts: %+v, %v", accounts, err) }
+	approve := "/admin/participants/" + strconv.FormatInt(accounts[0].ID, 10) + "/approve"
+	do(approve, url.Values{"confirm": {"yes"}}, nil, false, 303)
+	do(approve, url.Values{"confirm": {"yes"}}, nil, true, 303)
 	do("/me/pair/new", url.Values{}, cookie, false, 200)
 }

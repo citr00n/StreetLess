@@ -114,10 +114,6 @@ func (s *server) pairNew(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if p.IsAdmin {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		return
-	}
 	form, status := readForm(w, r)
 	if status == 0 && len(form) != 0 {
 		status = http.StatusBadRequest
@@ -137,7 +133,7 @@ func (s *server) pairNew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	render(w, http.StatusOK, "pairing", page{Title: "Connect 3DS", PairCode: code, PairQR: template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png)), PairHost: s.cfg.Host, PairIPv4: s.cfg.IPv4, PairPort: s.cfg.Port})
+	render(w, http.StatusOK, "pairing", page{Title: "Connect 3DS", IsAdmin: p.IsAdmin, PairCode: code, PairQR: template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png)), PairHost: s.cfg.Host, PairIPv4: s.cfg.IPv4, PairPort: s.cfg.Port})
 }
 func (s *server) pairClaim(w http.ResponseWriter, r *http.Request) {
 	if !s.limits.allow(r, "pair", 30, 300) {

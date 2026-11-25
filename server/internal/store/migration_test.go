@@ -47,7 +47,33 @@ func TestMigrateExistingRelay(t *testing.T) {
 	if _, err := s.Session(context.Background(), cookie); err != ErrUnauthorized { t.Fatalf("reset did not revoke legacy session: %v", err) }
 	if _, err := s.LoginPassword(context.Background(), "legacy_user", "sailboat", ""); err != nil { t.Fatalf("legacy login: %v", err) }
 	var version int
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 3 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 4 {
 		t.Fatalf("migration version = %d (%v)", version, err)
+	}
+}
+
+func TestLegacyAdminUsernameKeepsSeparateParticipant(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	legacy, credentials := testPeer(t, s, "Legacy")
+	if _, err := s.db.Exec("UPDATE participants SET username='admin' WHERE id=?", legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+	cookie, err := s.LoginPassword(t.Context(), "admin", credentials.Password, "")
+	if err != nil { t.Fatal(err) }
+	participant, err := s.Session(t.Context(), cookie)
+	if err != nil || participant.ID != legacy.ID || participant.IsAdmin {
+		t.Fatalf("legacy participant acquired admin role: %+v, %v", participant, err)
+	}
+	adminCookie, err := s.LoginAdmin(t.Context(), "")
+	if err != nil { t.Fatal(err) }
+	admin, err := s.Session(t.Context(), adminCookie)
+	if err != nil || !admin.IsAdmin || admin.ID == legacy.ID || admin.ID == 0 {
+		t.Fatalf("admin account was not isolated: %+v, %v", admin, err)
+	}
+	if err := s.Revoke(t.Context(), admin.ID); err != ErrConflict {
+		t.Fatalf("admin participant could be revoked: %v", err)
+	}
+	if _, err := s.Bearer(t.Context(), credentials.Token); err != nil {
+		t.Fatalf("legacy bearer changed: %v", err)
 	}
 }

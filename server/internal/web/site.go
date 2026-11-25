@@ -113,7 +113,6 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		if status == 0 {
 			var cookie string
 			var err error
-			isAdmin := false
 			switch {
 			case len(form) == 2 && form.Has("username") && form.Has("password"):
 				if !s.limits.allow(r, "login", 10, 200) || !s.passwordSlot() {
@@ -123,7 +122,6 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 					digest := sha256.Sum256([]byte(password))
 					if strings.EqualFold(username, "admin") && subtle.ConstantTimeCompare(digest[:], s.cfg.AdminHash[:]) == 1 {
 						cookie, err = s.db.LoginAdmin(r.Context(), browserToken(r))
-						isAdmin = true
 					} else {
 						cookie, err = s.db.LoginPassword(r.Context(), username, password, browserToken(r))
 					}
@@ -137,9 +135,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 			}
 			if status == 0 {
 				writeSession(w, cookie, 86400)
-				destination := "/me"
-				if isAdmin { destination = "/admin" }
-				http.Redirect(w, r, destination, http.StatusSeeOther)
+				http.Redirect(w, r, "/me", http.StatusSeeOther)
 				return
 			}
 		}
@@ -193,10 +189,6 @@ func (s *server) session(w http.ResponseWriter, r *http.Request) (store.Principa
 
 func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	if p, ok := s.session(w, r); ok {
-		if p.IsAdmin {
-			http.Redirect(w, r, "/admin", http.StatusSeeOther)
-			return
-		}
 		s.mePage(w, r, p, http.StatusOK)
 	}
 }
@@ -221,7 +213,7 @@ func (s *server) mePage(w http.ResponseWriter, r *http.Request, p store.Principa
 		http.Error(w, statusMessage(status), status)
 		return
 	}
-	data := page{Title: "Account", Social: view}
+	data := page{Title: "Account", Social: view, IsAdmin: p.IsAdmin}
 	if status != http.StatusOK {
 		data.Error = statusMessage(status)
 	}
@@ -234,10 +226,6 @@ func (s *server) meAction(w http.ResponseWriter, r *http.Request) {
 	}
 	p, ok := s.session(w, r)
 	if !ok {
-		return
-	}
-	if p.IsAdmin {
-		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 	form, status := readForm(w, r)

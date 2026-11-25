@@ -72,9 +72,43 @@ func (s *Store) SetRegistration(ctx context.Context, mode string) error {
 	return err
 }
 
+// The administrator has a dedicated participant, separate from any legacy
+// participant named admin. Only admin-password sessions grant the role.
+func ensureAdminParticipant(ctx context.Context, tx *sql.Tx, now int64) error {
+	var participantID int64
+	err := tx.QueryRowContext(ctx, "SELECT participant_id FROM administrator_account WHERE id=1").Scan(&participantID)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	for {
+		var friend [8]byte
+		if _, err := rand.Read(friend[:]); err != nil {
+			return err
+		}
+		code := hex.EncodeToString(friend[:])
+		_, token := makeSecret()
+		err = tx.QueryRowContext(ctx, `INSERT INTO participants(label,token_hash,friend_code,created_at)
+			VALUES(?,?,?,?) ON CONFLICT DO NOTHING RETURNING id`, "Admin-"+code, token, code, now).Scan(&participantID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "INSERT INTO administrator_account VALUES(1,?)", participantID)
+		return err
+	}
+}
+
 func (s *Store) LoginAdmin(ctx context.Context, oldCookie string) (string, error) {
 	var cookie string
 	err := s.mutate(ctx, func(tx *sql.Tx, now int64) error {
+		if err := ensureAdminParticipant(ctx, tx, now); err != nil {
+			return err
+		}
 		if old, ok := secretHash(oldCookie); ok {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM web_sessions WHERE session_hash=?", old); err != nil { return err }
 			if _, err := tx.ExecContext(ctx, "DELETE FROM admin_sessions WHERE session_hash=?", old); err != nil { return err }

@@ -1,13 +1,17 @@
 package web
 
 import (
+	"bytes"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"streetless/internal/store"
+	"streetless/internal/wire"
 )
 
 func TestAdminSessionsAndRegistrationSettings(t *testing.T) {
@@ -51,6 +55,41 @@ func TestAdminSessionsAndRegistrationSettings(t *testing.T) {
 	now = now.Add(24 * time.Hour)
 	if _, err := s.Session(t.Context(), admin.Value); err != store.ErrUnauthorized { t.Fatalf("admin did not expire: %v", err) }
 	if _, err := s.Session(t.Context(), user.Value); err != store.ErrUnauthorized { t.Fatalf("user did not expire: %v", err) }
+}
+
+func TestAdminIsAlsoParticipant(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "relay.sqlite"), nil)
+	if err != nil { t.Fatal(err) }
+	defer s.Close()
+	f, origin := edge(t, s, false)
+	login := func(username, password string) *http.Cookie {
+		values := url.Values{"username": {username}, "password": {password}}
+		_, response := send(t, f, request(t, f, "POST", "/login", "application/x-www-form-urlencoded", origin, "", []byte(values.Encode())), 303)
+		if response.Header.Get("Location") != "/me" { t.Fatalf("login destination: %s", response.Header.Get("Location")) }
+		return response.Cookies()[0]
+	}
+	if err := s.Register(t.Context(), "Player", "player", "sailboat"); err != nil { t.Fatal(err) }
+	user := login("player", "sailboat")
+	admin := login("admin", testAdmin)
+	get := func(path string, cookie *http.Cookie, status int) []byte {
+		r := request(t, f, "GET", path, "", "", "", nil)
+		r.AddCookie(cookie)
+		b, _ := send(t, f, r, status)
+		return b
+	}
+	if !bytes.Contains(get("/me", admin, 200), []byte(`href="/admin"`)) { t.Fatal("admin dashboard link missing") }
+	if bytes.Contains(get("/me", user, 200), []byte(`href="/admin"`)) { t.Fatal("admin dashboard link exposed to user") }
+	get("/admin", user, 403)
+	get("/admin", admin, 200)
+	r := request(t, f, "POST", "/me/pair/new", "application/x-www-form-urlencoded", origin, "", nil)
+	r.AddCookie(admin)
+	body, _ := send(t, f, r, 200)
+	code := regexp.MustCompile(`\b[0-9a-f]{32}\b`).Find(body)
+	if code == nil { t.Fatal("admin pairing code missing") }
+	token := strings.Repeat("a", 64)
+	form := url.Values{"code": {string(code)}, "token": {token}}
+	send(t, f, request(t, f, "POST", "/v1/pair", "application/x-www-form-urlencoded", "", "", []byte(form.Encode())), 204)
+	send(t, f, request(t, f, "POST", "/v1/sync", wire.Binary, "", token, syncRequest()), 200)
 }
 
 func TestPasswordPolicyAndReservedAdmin(t *testing.T) {
