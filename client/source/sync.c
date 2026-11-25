@@ -2,6 +2,11 @@
 #include "cecd.h"
 #include "journal.h"
 #include "selection.h"
+#ifndef STREETLESS_BACKGROUND
+#include "social.h"
+#include "title_names.h"
+#include <inttypes.h>
+#endif
 #include <mbedtls/md.h>
 #include <mbedtls/platform_util.h>
 #include <stdlib.h>
@@ -154,6 +159,11 @@ int sync_run(Http *http, const Config *config) {
     uint8_t *request = NULL, *response = NULL;
     u32 native_count = 0;
     size_t box_count = 0, title_count = 0, applied_count = 0, reject_count = 0;
+#ifndef STREETLESS_BACKGROUND
+    uint32_t uploaded[SL_TITLES];
+    size_t uploaded_count = 0;
+    bool relay_accepted = false;
+#endif
     bool committed = false;
     const char *phase;
 
@@ -235,6 +245,11 @@ int sync_run(Http *http, const Config *config) {
         puts("Invalid sync response; no passes applied.");
         goto cleanup;
     }
+#ifndef STREETLESS_BACKGROUND
+    relay_accepted = true;
+    for (size_t i = 0; i < title_count; ++i)
+        if (titles[i].size) uploaded[uploaded_count++] = titles[i].title;
+#endif
 
     /* Classify all records before the next IPC can fail, so deterministic
      * rejects are independent of the local CECD commit. */
@@ -307,6 +322,18 @@ cleanup:;
         puts("Restart the console before another Sync.");
     }
     if (reject_count && !http_cancelled(http)) reject_slots(http, rejects, reject_count);
+#ifndef STREETLESS_BACKGROUND
+    if (relay_accepted) {
+        if (uploaded_count) {
+            char names[SL_TITLES][64];
+            title_names_resolve(uploaded, uploaded_count, names);
+            puts("Uploaded to relay (not necessarily queued or received):");
+            for (size_t i = 0; i < uploaded_count; ++i) printf("- %s\n", names[i]);
+        } else {
+            puts("Uploaded to relay: no outgoing game slots.");
+        }
+    }
+#endif
     if (committed) {
         printf("Received %u game slot(s).\n", (unsigned)applied_count);
         if (!applied_count) puts("Wait for other players or make inbox space.");
@@ -316,6 +343,27 @@ cleanup:;
             journal_ack(http, ids, applied_count);
         } else puts("Passes are saved locally; ACK deferred.");
     }
+#ifndef STREETLESS_BACKGROUND
+    if (relay_accepted && !http_cancelled(http)) {
+        SocialStats stats;
+        if (social_stats(http, &stats)) {
+            printf("Queued for others since upgrade: %" PRId64 "\n", stats.queued_total);
+            if (!stats.public_enabled) {
+                puts("Public lobby: Off.");
+            } else if (!stats.public_count) {
+                puts("Public lobby: no staged game slots.");
+            } else {
+                char names[SOCIAL_PUBLIC_OUTBOX_MAX][64];
+                title_names_resolve(stats.public_titles, stats.public_count, names);
+                puts("Staged in public lobby; waiting for a match,");
+                puts("not necessarily received:");
+                for (size_t i = 0; i < stats.public_count; ++i) printf("- %s\n", names[i]);
+            }
+        } else {
+            puts("Queue total and public lobby staging unavailable.");
+        }
+    }
+#endif
     free(response);
     return R_FAILED(restored) || R_FAILED(rollback) ? -1 : committed ? (int)applied_count : -2;
 }

@@ -44,6 +44,7 @@ func New(db *store.Store, cfg Config) http.Handler {
 	mux.HandleFunc("/v1/ack", only(http.MethodPost, s.ack))
 	mux.HandleFunc("/v1/reject", only(http.MethodPost, s.reject))
 	mux.HandleFunc("/v1/social", s.socialAPI)
+	mux.HandleFunc("/v1/stats", only(http.MethodGet, s.statsAPI))
 	mux.HandleFunc("/login", s.login)
 	mux.HandleFunc("/register", s.register)
 	mux.HandleFunc("/logout", only(http.MethodPost, s.logout))

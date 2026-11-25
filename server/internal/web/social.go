@@ -119,3 +119,17 @@ func (s *server) socialAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (s *server) statsAPI(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.bearer(w, r)
+	if !ok {
+		return
+	}
+	stats, err := s.db.Stats(r.Context(), p)
+	if err != nil {
+		apiError(w, storeStatus(err), "")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(stats)
+}

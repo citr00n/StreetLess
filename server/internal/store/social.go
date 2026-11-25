@@ -22,12 +22,58 @@ type SocialView struct {
 }
 
 type Profile struct {
-	ID            int64  `json:"id"`
-	Label         string `json:"label"`
-	FriendCode    string `json:"friend_code"`
-	PublicEnabled bool   `json:"public_enabled"`
-	PublicUsed    int    `json:"public_used"`
-	PendingInbox  int    `json:"pending_inbox"`
+	ID             int64          `json:"id"`
+	Label          string         `json:"label"`
+	FriendCode     string         `json:"friend_code"`
+	PublicEnabled  bool           `json:"public_enabled"`
+	PublicUsed     int            `json:"public_used"`
+	PendingInbox   int            `json:"pending_inbox"`
+	QueuedTotal    int64          `json:"-"`
+	PublicOutboxes []PublicOutbox `json:"-"`
+}
+
+type PublicOutbox struct {
+	Title    uint32 `json:"title"`
+	Messages int    `json:"messages"`
+}
+
+type Stats struct {
+	QueuedTotal    int64          `json:"queued_total"`
+	PublicEnabled  bool           `json:"public_enabled"`
+	PublicOutboxes []PublicOutbox `json:"public_outboxes"`
+}
+
+func publicOutboxes(ctx context.Context, tx *sql.Tx, id, now int64) ([]PublicOutbox, error) {
+	outboxes := []PublicOutbox{}
+	err := socialRows(ctx, tx, func(rows *sql.Rows) error {
+		var outbox PublicOutbox
+		if err := rows.Scan(&outbox.Title, &outbox.Messages); err != nil {
+			return err
+		}
+		outboxes = append(outboxes, outbox)
+		return nil
+	}, `SELECT o.title,o.message_count FROM outboxes o JOIN participants p ON p.id=o.participant_id
+		WHERE o.participant_id=? AND p.public_enabled=1 AND o.public_ready=1
+		AND o.updated_at>? AND o.mode<>1 AND length(o.slot)>0 AND o.message_count>0
+		ORDER BY o.title LIMIT 12`, id, now-week)
+	return outboxes, err
+}
+
+func (s *Store) Stats(ctx context.Context, p Principal) (Stats, error) {
+	var stats Stats
+	err := s.mutate(ctx, func(tx *sql.Tx, now int64) error {
+		if err := active(ctx, tx, p, now); err != nil {
+			return err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT queued_total,public_enabled FROM participants WHERE id=?`, p.ID).
+			Scan(&stats.QueuedTotal, &stats.PublicEnabled); err != nil {
+			return err
+		}
+		var err error
+		stats.PublicOutboxes, err = publicOutboxes(ctx, tx, p.ID, now)
+		return err
+	})
+	return stats, err
 }
 
 type Friend struct {
@@ -79,7 +125,7 @@ func (s *Store) Social(ctx context.Context, p Principal) (SocialView, error) {
 		if err := active(ctx, tx, p, now); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT id,label,friend_code,public_enabled,
+		if err := tx.QueryRowContext(ctx, `SELECT id,label,friend_code,public_enabled,queued_total,
 			(SELECT count(*) FROM public_receipts WHERE recipient_id=p.id AND created_at>?),
 			(SELECT count(*) FROM deliveries d LEFT JOIN participants a ON a.id=d.sender_id
 			 WHERE d.recipient_id=p.id AND ((d.route='test' AND ? AND d.created_at>?) OR
@@ -87,7 +133,12 @@ func (s *Store) Social(ctx context.Context, p Principal) (SocialView, error) {
 			 (d.route='public' AND p.public_enabled=1 AND a.public_enabled=1) OR
 			 (d.route='friend' AND `+friendPermission+`) OR (d.route='room' AND `+roomPermission+`)))))
 			FROM participants p WHERE id=?`, now-day, s.debug, now-day, now-week, p.ID).
-			Scan(&view.Me.ID, &view.Me.Label, &view.Me.FriendCode, &view.Me.PublicEnabled, &view.Me.PublicUsed, &view.Me.PendingInbox); err != nil {
+			Scan(&view.Me.ID, &view.Me.Label, &view.Me.FriendCode, &view.Me.PublicEnabled, &view.Me.QueuedTotal, &view.Me.PublicUsed, &view.Me.PendingInbox); err != nil {
+			return err
+		}
+		var err error
+		view.Me.PublicOutboxes, err = publicOutboxes(ctx, tx, p.ID, now)
+		if err != nil {
 			return err
 		}
 		if err := socialRows(ctx, tx, func(rows *sql.Rows) error {

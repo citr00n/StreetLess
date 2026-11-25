@@ -125,8 +125,14 @@ func Open(path string, now func() time.Time) (*Store, error) {
 				PRAGMA user_version=6;`); err != nil {
 				return err
 			}
-			return nil
+			fallthrough
 		case 6:
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE participants ADD COLUMN queued_total INTEGER NOT NULL DEFAULT 0 CHECK(typeof(queued_total)='integer' AND queued_total>=0);
+				PRAGMA user_version=7;`); err != nil {
+				return err
+			}
+			fallthrough
+		case 7:
 			return nil
 		default:
 			return fmt.Errorf("unsupported SQLite schema version %d", version)

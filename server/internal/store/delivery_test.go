@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/binary"
 	"errors"
 	"path/filepath"
@@ -109,6 +110,14 @@ func expectSlot(t *testing.T, out []wire.Delivery, want wire.Title) uint64 {
 	return out[0].ID
 }
 
+func assertQueued(t *testing.T, s *Store, p Principal, want int64) {
+	t.Helper()
+	got, err := s.Stats(t.Context(), p)
+	if err != nil || got.QueuedTotal != want {
+		t.Fatalf("queued total for %d = %d, want %d: %v", p.ID, got.QueuedTotal, want, err)
+	}
+}
+
 func TestQueuePersistsAndSettles(t *testing.T) {
 	s, now, path := newTestStore(t)
 	a, ca := testPeer(t, s, "A")
@@ -118,6 +127,8 @@ func TestQueuePersistsAndSettles(t *testing.T) {
 		t.Fatal("received before a peer joined")
 	}
 	bid := expectSlot(t, mustSync(t, s, b, bv), av)
+	assertQueued(t, s, a, 1)
+	assertQueued(t, s, b, 1)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +154,14 @@ func TestQueuePersistsAndSettles(t *testing.T) {
 	if len(mustSync(t, s, a, av)) != 0 {
 		t.Fatal("settled slot returned")
 	}
+	assertQueued(t, s, a, 1)
+	assertQueued(t, s, b, 1)
+	*now = now.Add(8 * 24 * time.Hour)
+	if err := s.Clean(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	assertQueued(t, s, a, 1)
+	assertQueued(t, s, b, 1)
 }
 
 func TestRejectUnblocksTitle(t *testing.T) {
@@ -172,6 +191,7 @@ func TestRejectUnblocksTitle(t *testing.T) {
 	if out, err := s.Reject(ctx, a, items); err != nil || len(out) != 1 {
 		t.Fatalf("could not reject: %v %v", out, err)
 	}
+	assertQueued(t, s, b, 1)
 	good := expectSlot(t, mustSync(t, s, a, read), second)
 	if out, err := s.Reject(ctx, a, items); err != nil || len(out) != 0 {
 		t.Fatalf("repeated reject affected queue: %v %v", out, err)
@@ -244,6 +264,8 @@ func TestTestDeliveryIsolationAndExpiry(t *testing.T) {
 	if len(mustSync(t, s, b, local)) != 0 {
 		t.Fatal("test slot leaked to bystander")
 	}
+	assertQueued(t, s, a, 0)
+	assertQueued(t, s, b, 0)
 	if uint64(id) != expectSlot(t, mustSync(t, s, a, local), native) {
 		t.Fatal("wrong test ID")
 	}
@@ -263,4 +285,98 @@ func TestTestDeliveryIsolationAndExpiry(t *testing.T) {
 	if uint64(id) != expectSlot(t, mustSync(t, s, a, local), native) {
 		t.Fatal("debug queue was lost")
 	}
+}
+
+func TestQueuedTotalRollsBack(t *testing.T) {
+	s, _, _ := newTestStore(t)
+	a, _ := testPeer(t, s, "sender")
+	b, _ := testPeer(t, s, "recipient")
+	slot := titleSlot(t, 2, 'x')
+	sentinel := errors.New("abort transaction")
+	err := s.mutate(t.Context(), func(tx *sql.Tx, now int64) error {
+		if _, err := putDelivery(t.Context(), tx, a.ID, b.ID, mii, slot.Slot, slot.Stats, "friend", 0, now); err != nil {
+			return err
+		}
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("transaction error: %v", err)
+	}
+	assertQueued(t, s, a, 0)
+	err = s.mutate(t.Context(), func(tx *sql.Tx, now int64) error {
+		_, err := putDelivery(t.Context(), tx, a.ID, -1, mii, slot.Slot, slot.Stats, "friend", 0, now)
+		return err
+	})
+	if err == nil {
+		t.Fatal("delivery to missing recipient succeeded")
+	}
+	assertQueued(t, s, a, 0)
+}
+
+func TestPublicOutboxStats(t *testing.T) {
+	s, now, _ := newTestStore(t)
+	a, _ := testPeer(t, s, "sender")
+	b, _ := testPeer(t, s, "other")
+	ctx := t.Context()
+	check := func(enabled bool, want []PublicOutbox) {
+		t.Helper()
+		stats, err := s.Stats(ctx, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.PublicEnabled != enabled || stats.QueuedTotal != 0 || stats.PublicOutboxes == nil || len(stats.PublicOutboxes) != len(want) {
+			t.Fatalf("stats = %+v, enabled %v outboxes %v", stats, enabled, want)
+		}
+		for i := range want {
+			if stats.PublicOutboxes[i] != want[i] {
+				t.Fatalf("outboxes = %v, want %v", stats.PublicOutboxes, want)
+			}
+		}
+		view, err := s.Social(ctx, a)
+		if err != nil || len(view.Me.PublicOutboxes) != len(want) {
+			t.Fatalf("social outboxes = %v, error %v", view.Me.PublicOutboxes, err)
+		}
+	}
+	check(true, nil)
+	mustSync(t, s, a, titleSlot(t, 2, 'a'))
+	want := []PublicOutbox{{Title: mii, Messages: 1}}
+	check(true, want)
+	// Copy metadata to exercise filtering and ordering independently of wire validation.
+	for _, row := range []struct {
+		title, mode, ready, count int
+		updated                   int64
+		empty                     bool
+	}{
+		{1, 2, 1, 2, now.Unix(), false},
+		{2, 1, 1, 1, now.Unix(), false},
+		{3, 2, 0, 1, now.Unix(), false},
+		{4, 2, 1, 1, now.Unix() - week, false},
+		{5, 2, 1, 1, now.Unix(), true},
+		{6, 2, 1, 0, now.Unix(), false},
+	} {
+		_, err := s.db.ExecContext(ctx, `INSERT INTO outboxes
+			SELECT participant_id,?, ?,free_count,free_bytes,max_message,max_batch,
+			CASE WHEN ? THEN NULL ELSE slot END,?,message_bytes,largest_message,?,?
+			FROM outboxes WHERE participant_id=? AND title=?`,
+			row.title, row.mode, row.empty, row.count, row.updated, row.ready, a.ID, mii)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustSync(t, s, b, titleSlot(t, 2, 'b'))
+	check(true, []PublicOutbox{{Title: 1, Messages: 2}, {Title: mii, Messages: 1}})
+	if err := s.Act(ctx, a, Action{Kind: "public_set", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	check(false, nil)
+	if err := s.Act(ctx, a, Action{Kind: "public_set", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	check(true, nil)
+	mustSync(t, s, a, titleSlot(t, 2, 'a'))
+	check(true, want)
+	*now = now.Add(7 * 24 * time.Hour)
+	check(true, nil)
+	mustSync(t, s, a, titleSlot(t, 2, 0))
+	check(true, nil)
 }
